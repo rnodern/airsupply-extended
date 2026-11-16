@@ -36,7 +36,7 @@ Options: `nights` (14), `goal` (4), `title`, `only_owner`. With
 
 ## AirSupply Extended dashboard (development)
 
-The fork's `airsupply-card` now displays a responsive **14-night history
+The fork's `airsupply-extended-card` now displays a responsive **14-night history
 dashboard** when its new Home Assistant `Therapy history` MQTT sensor is
 available. It shows:
 
@@ -45,7 +45,7 @@ available. It shows:
 - Stacked obstructive/central apnoea and hypopnoea event counts.
 - A table of nightly usage, AHI, event counts and RERAs.
 
-The existing original therapy-hours-only card remains available using
+The extended card uses a separate custom element to avoid a conflict with upstream `airsupply-card`. The original therapy-hours-only view remains available using
 `view: usage`, and is the automatic fallback before history is present.
 
 ### Install the card in Home Assistant
@@ -61,7 +61,7 @@ Then add a Manual card (replace the entity ID with the actual
 `Therapy hours` entity from your MQTT device):
 
 ```yaml
-type: custom:airsupply-card
+type: custom:airsupply-extended-card
 entity: sensor.airsupply_58_26_3a_e8_c9_7d_therapy_hours
 view: dashboard
 nights: 14
