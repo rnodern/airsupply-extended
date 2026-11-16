@@ -34,6 +34,53 @@ Options: `nights` (14), `goal` (4), `title`, `only_owner`. With
 
 `card/preview.html` opens in any browser with invented data.
 
+## AirSupply Extended dashboard (development)
+
+The fork's `airsupply-card` now displays a responsive **14-night history
+dashboard** when its new Home Assistant `Therapy history` MQTT sensor is
+available. It shows:
+
+- Latest AHI, usage and a usage-weighted average AHI for the available nights.
+- Nightly AHI and usage charts, with the configured four-hour goal.
+- Stacked obstructive/central apnoea and hypopnoea event counts.
+- A table of nightly usage, AHI, event counts and RERAs.
+
+The existing original therapy-hours-only card remains available using
+`view: usage`, and is the automatic fallback before history is present.
+
+### Install the card in Home Assistant
+
+This GitHub fork is still on a **development branch**. For staging,
+download `card/airsupply-card.js` from
+`feature/airmini-history` and put it into Home Assistant's
+`/config/www/airsupply-extended/airsupply-card.js`. Register the
+resource URL `/local/airsupply-extended/airsupply-card.js` as a
+**JavaScript module** in Home Assistant's Dashboard resources.
+
+Then add a Manual card (replace the entity ID with the actual
+`Therapy hours` entity from your MQTT device):
+
+```yaml
+type: custom:airsupply-card
+entity: sensor.airsupply_58_26_3a_e8_c9_7d_therapy_hours
+view: dashboard
+nights: 14
+goal: 4
+title: AirMini therapy
+```
+
+The history sensor is discovered through MQTT from the same AirSupply instance;
+no separate broker, API key or Home Assistant REST access is required. Your
+browser reads only Home Assistant's existing entity attributes.
+
+**Privacy:** The history sensor contains nightly medical summaries and Home
+Assistant retains them. Restrict dashboard and Home Assistant access to people
+you authorise. These are calculations from machine events, not medical advice.
+Pressure and leak units have not been validated and are not charted.
+
+The original upstream add-on installation instructions above do **not** install
+this development fork or its changed card.
+
 ## Layout
 
 | | |
