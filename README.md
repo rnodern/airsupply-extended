@@ -62,12 +62,23 @@ Then add a Manual card (replace the entity ID with the actual
 
 ```yaml
 type: custom:airsupply-extended-card
-entity: sensor.airsupply_58_26_3a_e8_c9_7d_therapy_hours
+entity: sensor.resmed_871866_therapy_hours
+history_entity: sensor.resmed_871866_therapy_history
 view: dashboard
 nights: 14
 goal: 4
 title: AirMini therapy
 ```
+
+The example uses Home Assistant's actual entity names from an AirMini installed
+in the local test environment. If your `Therapy history` sensor has another
+entity ID, set `history_entity:` explicitly to that sensor. The card also
+attempts to discover history alongside `entity:`, but no longer displays
+misleading cumulative-recorder usage when the history sensor is missing.
+
+After installing a changed JS card, update its Home Assistant resource URL
+query string (for example `?v=2`) and refresh the browser. The running
+Pi's AirSupply container does not need restarting for card-only fixes.
 
 The history sensor is discovered through MQTT from the same AirSupply instance;
 no separate broker, API key or Home Assistant REST access is required. Your
