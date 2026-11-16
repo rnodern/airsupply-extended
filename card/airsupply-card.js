@@ -114,7 +114,7 @@ class AirsupplyCard extends HTMLElement {
     return noon.getTime();
   }
 
-  _fold(rows) {
+  _fold(rows, now = new Date()) {
     const buckets = new Map();
     let previous = null;
 
@@ -133,7 +133,7 @@ class AirsupplyCard extends HTMLElement {
       buckets.set(night, (buckets.get(night) || 0) + hours);
     }
 
-    const latest = this._nightStart(new Date());
+    const latest = this._nightStart(now);
     const out = [];
     for (let i = this._config.nights - 1; i >= 0; i -= 1) {
       const at = latest - i * DAY;
