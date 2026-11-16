@@ -24,7 +24,7 @@ jobs:
 
       - uses: actions/setup-python@v6
         with:
-          python-version: '3.x'
+          python-version: '3.13'
 
       - run: pip install -r requirements.txt
         working-directory: airsupply
@@ -38,8 +38,31 @@ jobs:
         env:
           PYTHONPATH: src
 
-  image:
+  card:
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: node --check card/airsupply-card.js
+      - run: node card/test.mjs
+      - run: node card/owner.test.mjs
+      - run: node card/dashboard.test.mjs
+
+  image:
+    name: image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            base: ghcr.io/home-assistant/amd64-base:3.21
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            base: ghcr.io/home-assistant/aarch64-base:3.21
     steps:
       - uses: actions/checkout@v6
 
@@ -50,6 +73,6 @@ jobs:
           context: airsupply
           push: false
           build-args: |
-            BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
+            BUILD_FROM=${{ matrix.base }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

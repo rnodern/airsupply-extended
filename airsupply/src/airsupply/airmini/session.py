@@ -48,6 +48,7 @@ class Session:
         self._loop = None
         self._closed = False
         self._notify_hook = notify
+        self._history_collector = None
 
         # Called once if the channel goes away on its own. A session that is
         # held open for hours has to be able to say it is gone; one that was
@@ -104,6 +105,9 @@ class Session:
             except (ValueError, OSError):
                 pass
         self._fail_pending(ConnectionResetError("session closed"))
+        collector = self._history_collector
+        if collector is not None and not collector['done'].done():
+            collector['done'].set_exception(ConnectionResetError('session closed'))
         if self._am:
             _lib.lib().airmini_destroy(self._am)
             self._am = None
@@ -205,6 +209,25 @@ class Session:
             name = method.decode("utf-8", "replace") if method else ""
             body = _decode(payload)
             log.debug("notification %s", name)
+            collector = self._history_collector
+            if collector is not None and name == "LoggedData" and isinstance(body, dict):
+                params = body.get("params")
+                if isinstance(params, dict):
+                    relevant = False
+                    for entry in params.get("data", []):
+                        if not isinstance(entry, dict):
+                            continue
+                        signal = entry.get("dataId")
+                        if signal not in collector["signals"]:
+                            continue
+                        relevant = True
+                        if entry.get("complete") is True:
+                            collector["complete"].add(signal)
+                    if relevant:
+                        collector["messages"].append(body)
+                    if (collector["signals"] <= collector["complete"]
+                            and not collector["done"].done()):
+                        collector["done"].set_result(None)
             if self._notify_hook:
                 self._notify_hook(name, body)
         except Exception:
@@ -311,6 +334,36 @@ class Session:
                 self._am, array, len(keepalive), since, cb, user
             ),
         )
+
+    async def collect_logged_data(self, signals, from_iso, *, timeout=300):
+        """Collect requested read-only LoggedData notifications until complete.
+
+        Uses the already-authenticated session; there is no second Bluetooth
+        connection. Incomplete/aborted collection raises and must not be saved.
+        """
+        if self._history_collector is not None:
+            raise RuntimeError("history collection already active")
+        requested = frozenset(signals)
+        if not requested or len(requested) > 6:
+            raise ValueError("request between one and six logged signals")
+        loop = asyncio.get_running_loop()
+        collector = {
+            "signals": requested,
+            "complete": set(),
+            "messages": [],
+            "done": loop.create_future(),
+        }
+        self._history_collector = collector
+        try:
+            async def receive():
+                await self.get_logged_data(list(requested), from_iso)
+                await collector["done"]
+            await asyncio.wait_for(receive(), timeout=timeout)
+            return collector["messages"]
+        finally:
+            if not collector["done"].done():
+                collector["done"].cancel()
+            self._history_collector = None
 
     async def get_history(self, from_iso):
         lib = _lib.lib()

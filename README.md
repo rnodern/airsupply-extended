@@ -34,6 +34,64 @@ Options: `nights` (14), `goal` (4), `title`, `only_owner`. With
 
 `card/preview.html` opens in any browser with invented data.
 
+## AirSupply Extended dashboard (development)
+
+The fork's `airsupply-extended-card` now displays a responsive **14-night history
+dashboard** when its new Home Assistant `Therapy history` MQTT sensor is
+available. It shows:
+
+- Latest AHI, usage and a usage-weighted average AHI for the available nights.
+- Nightly AHI and usage charts, with the configured four-hour goal.
+- Stacked obstructive/central apnoea and hypopnoea event counts.
+- A table of nightly usage, AHI, event counts and RERAs.
+
+The extended card uses a separate custom element to avoid a conflict with upstream `airsupply-card`. The original therapy-hours-only view remains available using
+`view: usage`, and is the automatic fallback before history is present.
+
+### Install the card in Home Assistant
+
+This GitHub fork is still on a **development branch**. For staging,
+download `card/airsupply-card.js` from
+`feature/airmini-history` and put it into Home Assistant's
+`/config/www/airsupply-extended/airsupply-card.js`. Register the
+resource URL `/local/airsupply-extended/airsupply-card.js` as a
+**JavaScript module** in Home Assistant's Dashboard resources.
+
+Then add a Manual card (replace the entity ID with the actual
+`Therapy hours` entity from your MQTT device):
+
+```yaml
+type: custom:airsupply-extended-card
+entity: sensor.resmed_871866_therapy_hours
+history_entity: sensor.resmed_871866_therapy_history
+view: dashboard
+nights: 14
+goal: 4
+title: AirMini therapy
+```
+
+The example uses Home Assistant's actual entity names from an AirMini installed
+in the local test environment. If your `Therapy history` sensor has another
+entity ID, set `history_entity:` explicitly to that sensor. The card also
+attempts to discover history alongside `entity:`, but no longer displays
+misleading cumulative-recorder usage when the history sensor is missing.
+
+After installing a changed JS card, update its Home Assistant resource URL
+query string (for example `?v=2`) and refresh the browser. The running
+Pi's AirSupply container does not need restarting for card-only fixes.
+
+The history sensor is discovered through MQTT from the same AirSupply instance;
+no separate broker, API key or Home Assistant REST access is required. Your
+browser reads only Home Assistant's existing entity attributes.
+
+**Privacy:** The history sensor contains nightly medical summaries and Home
+Assistant retains them. Restrict dashboard and Home Assistant access to people
+you authorise. These are calculations from machine events, not medical advice.
+Pressure and leak units have not been validated and are not charted.
+
+The original upstream add-on installation instructions above do **not** install
+this development fork or its changed card.
+
 ## Layout
 
 | | |

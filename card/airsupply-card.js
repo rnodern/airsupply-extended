@@ -25,7 +25,8 @@ const DAY = 86400000;
 class AirsupplyCard extends HTMLElement {
   static getStubConfig(hass) {
     const guess = Object.keys(hass?.states || {}).find(
-      (id) => id.startsWith("sensor.airsupply_") && id.endsWith("_therapy_hours"),
+      (id) => id.startsWith("sensor.") && id.endsWith("_therapy_hours") &&
+        (id.includes("resmed") || id.includes("airsupply")),
     );
     return { entity: guess || "sensor.airsupply_therapy_hours" };
   }
@@ -38,6 +39,8 @@ class AirsupplyCard extends HTMLElement {
       nights: NIGHTS,
       goal: GOAL_HOURS,
       only_owner: false,
+      view: "dashboard",
+      history_entity: null,
       ...config,
     };
     this._nights = null;
@@ -56,7 +59,7 @@ class AirsupplyCard extends HTMLElement {
       return;
     }
     this.style.display = "";
-    this._load();
+    if (this._config.view === "usage") this._load();
     this._render();
   }
 
@@ -113,7 +116,7 @@ class AirsupplyCard extends HTMLElement {
     return noon.getTime();
   }
 
-  _fold(rows) {
+  _fold(rows, now = new Date()) {
     const buckets = new Map();
     let previous = null;
 
@@ -132,11 +135,13 @@ class AirsupplyCard extends HTMLElement {
       buckets.set(night, (buckets.get(night) || 0) + hours);
     }
 
-    const latest = this._nightStart(new Date());
+    const latest = this._nightStart(now);
     const out = [];
     for (let i = this._config.nights - 1; i >= 0; i -= 1) {
       const at = latest - i * DAY;
-      out.push({ at, hours: buckets.get(at) || 0 });
+      const hours = buckets.get(at) || 0;
+      // A 29-hour therapy night is a broken recorder delta, not therapy.
+      out.push({ at, hours: hours > 25 ? null : hours });
     }
     return out;
   }
@@ -176,10 +181,19 @@ class AirsupplyCard extends HTMLElement {
       return;
     }
 
+    const usageOnly = this._config.view === "usage";
+    const history = usageOnly ? null : this._history();
     wrap.innerHTML = [
       this._head(),
-      this._problem ? `<p class="problem">${escape(this._problem)}</p>` : this._chart(),
-      this._foot(),
+      usageOnly
+        ? (this._problem ? `<p class="problem">${escape(this._problem)}</p>` : this._chart())
+        : history
+          ? this._dashboard()
+          : `<p class="problem">Nightly history is not available.
+             Check the MQTT “Therapy history” entity, then add
+             <code>history_entity: sensor.your_actual_therapy_history_id</code>
+             to this card. The card will not guess usage from the cumulative meter.</p>`,
+      usageOnly ? this._foot() : "",
     ].join("");
   }
 
@@ -222,6 +236,10 @@ class AirsupplyCard extends HTMLElement {
     const bars = nights
       .map((night, i) => {
         const x = i * step + gap / 2;
+        if (night.hours === null) {
+          return `<line class="empty" x1="${x + width / 2}" y1="${H}"
+            x2="${x + width / 2}" y2="${H - 3}"><title>Invalid recorder total</title></line>`;
+        }
         const height = H - y(night.hours);
         const short = night.hours + 0.0001 < goal;
         const label = `${dayName(night.at)} ${clock(night.hours)}`;
@@ -244,17 +262,197 @@ class AirsupplyCard extends HTMLElement {
     <div class="scale">${nights.map((n, i) => tick(n, i, nights.length)).join("")}</div>`;
   }
 
+  /* --- AirSupply Extended nightly dashboard ----------------------------- */
+
+  _historySensor() {
+    const states = this._hass?.states || {};
+    const entity = this._config.entity || "";
+    const stem = entity.replace(/^sensor\./, "").replace(/_therapy_hours$/, "");
+    const explicit = this._config.history_entity;
+    const ids = explicit ? [explicit] : [
+      `sensor.${stem}_therapy_history`,
+      `sensor.${stem}_history_nights`,
+    ];
+    for (const id of ids) {
+      const item = states[id];
+      if (Array.isArray(item?.attributes?.nights)) return item;
+    }
+    if (explicit) return null;
+
+    // A device's MQTT unique_id is not necessarily its Home Assistant entity_id.
+    // Only select a history sensor attributable to this machine.
+    const address = states[entity]?.attributes?.address;
+    const candidates = Object.entries(states).filter(([id, item]) =>
+      id.startsWith("sensor.") && Array.isArray(item?.attributes?.nights) &&
+      (id.startsWith(`sensor.${stem}_`) ||
+       (address && item.attributes.address === address)));
+    return candidates.length === 1 ? candidates[0][1] : null;
+  }
+
+  _history() {
+    const items = this._historySensor()?.attributes?.nights;
+    if (!Array.isArray(items) || !items.length) return null;
+    const byDate = new Map();
+    for (const item of items) {
+      if (!item || typeof item.night !== "string" ||
+          !/^\d{4}-\d{2}-\d{2}$/.test(item.night)) continue;
+      byDate.set(item.night, item);
+    }
+    const rows = [...byDate.values()].sort((a, b) => a.night.localeCompare(b.night))
+      .slice(-Math.max(1, Math.min(31, Number(this._config.nights) || 14)));
+    return rows.length ? rows : null;
+  }
+
+  _dashboard() {
+    const nights = this._history();
+    if (!nights) return '<p class="problem">No historical data received yet.</p>';
+
+    const valid = nights.filter((n) => Number.isFinite(n.usage_hours) && n.usage_hours > 0);
+    const latest = nights[nights.length - 1];
+    const hours = valid.reduce((total, n) => total + n.usage_hours, 0);
+    const events = valid.reduce((total, n) => total + (Number(n.ahi_events) || 0), 0);
+    const averageAHI = hours > 0 ? events / hours : null;
+    const overGoal = valid.filter((n) => n.usage_hours >= this._config.goal).length;
+
+    return `<div class="dashboard">
+      <div class="stats">
+        <div class="stat"><span class="stat-label">Latest AHI</span>
+          <strong>${this._number(latest.ahi)}</strong>
+          <small>events per hour</small></div>
+        <div class="stat"><span class="stat-label">Latest usage</span>
+          <strong>${this._hours(latest.usage_hours)}</strong>
+          <small>${escape(latest.night)}</small></div>
+        <div class="stat"><span class="stat-label">Average AHI</span>
+          <strong>${this._number(averageAHI)}</strong>
+          <small>weighted by usage · ${valid.length} nights</small></div>
+        <div class="stat"><span class="stat-label">Usage goal</span>
+          <strong>${overGoal}<span class="stat-sub"> / ${valid.length}</span></strong>
+          <small>nights ≥ ${escape(this._config.goal)} h</small></div>
+      </div>
+      ${this._metricChart(nights, "ahi", "AHI trend", "events/h", "ahi")}
+      ${this._metricChart(nights, "usage_hours", "Therapy usage", "hours", "usage")}
+      ${this._eventChart(nights)}
+      <div class="history-table">
+        <div class="history-heading">Nightly breakdown</div>
+        <div class="history-scroll"><table><thead><tr>
+          <th scope="col">Night</th><th scope="col">Usage</th>
+          <th scope="col">AHI</th><th scope="col">OA</th>
+          <th scope="col">CA</th><th scope="col">H</th>
+          <th scope="col">RERA</th>
+        </tr></thead><tbody>${nights.slice().reverse().map((n) => `<tr>
+          <td>${escape(n.night)}</td><td>${this._hours(n.usage_hours)}</td>
+          <td>${this._number(n.ahi)}</td>
+          <td>${this._count(n.obstructive_apnoeas)}</td>
+          <td>${this._count(n.central_apnoeas)}</td>
+          <td>${this._count(n.hypopnoeas)}</td>
+          <td>${this._count(n.rera)}</td>
+        </tr>`).join("")}</tbody></table></div>
+      </div>
+      <p class="fineprint">AHI is calculated from logged events and therapy time, not a
+      clinical assessment. OA = obstructive apnoea, CA = central apnoea,
+      H = hypopnoea. RERA is excluded from AHI. Leak and pressure
+      are withheld pending unit validation.</p>
+    </div>`;
+  }
+
+  _number(value) {
+    return typeof value === "number" && Number.isFinite(value)
+      ? escape(value.toFixed(2)) : "—";
+  }
+
+  _count(value) {
+    return Number.isInteger(value) && value >= 0 ? String(value) : "—";
+  }
+
+  _hours(value) {
+    if (!Number.isFinite(value) || value < 0) return "—";
+    const minutes = Math.round(value * 60);
+    return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
+  }
+
+  _metricChart(nights, key, title, units, kind) {
+    const width = 720, height = 145, margin = 18;
+    const values = nights.map((n) => Number.isFinite(n[key]) && n[key] >= 0 ? n[key] : null);
+    const max = Math.max(1, kind === "usage" ? this._config.goal + 1 : 5,
+      ...values.filter((v) => v !== null));
+    const scale = (v) => margin + (height - 2 * margin) * (1 - v / max);
+    const step = width / nights.length, bw = Math.max(2, step * .57);
+    const colours = kind === "usage" ? "usage" : "ahi";
+    const marks = nights.map((n, i) => {
+      const value = values[i], cx = (i + .5) * step;
+      if (value === null) return `<line class="missing-mark" x1="${cx}" y1="${height-margin-4}"
+        x2="${cx}" y2="${height-margin}"/>`;
+      const vHeight = Math.max(value === 0 ? 2 : 3, height - margin - scale(value));
+      const css = kind === "usage" && value < this._config.goal ? " below-goal" : "";
+      const label = `${n.night}: ${value.toFixed(2)} ${units}`;
+      return `<rect class="plot-bar ${colours}${css}" x="${cx-bw/2}" y="${height-margin-vHeight}"
+        width="${bw}" height="${vHeight}" rx="2"><title>${escape(label)}</title></rect>`;
+    }).join("");
+    const goal = kind === "usage" ? `<line class="target-line" x1="0" x2="${width}"
+      y1="${scale(this._config.goal)}" y2="${scale(this._config.goal)}"/>` : "";
+    return `<section class="plot">
+      <div class="plot-title"><b>${escape(title)}</b>
+        <span>${kind === "usage" ? escape(this._config.goal + "h goal") : "lower is generally better"}</span></div>
+      <svg class="plot-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
+        role="img" aria-label="${escape(title + " for " + nights.length + " nights")}">
+        <line class="axis" x1="0" x2="${width}" y1="${height-margin}" y2="${height-margin}"/>
+        ${goal}${marks}
+      </svg>
+      <div class="date-axis"><span>${escape(nights[0].night.slice(5))}</span>
+        <span>${escape(nights[nights.length-1].night.slice(5))}</span></div>
+    </section>`;
+  }
+
+  _eventChart(nights) {
+    const width = 720, height = 98, bottom = 12;
+    const categories = [
+      ["obstructive_apnoeas", "oa"],
+      ["central_apnoeas", "ca"],
+      ["hypopnoeas", "hyp"],
+    ];
+    const totals = nights.map((n) => categories.reduce(
+      (t, [key]) => t + (Number.isInteger(n[key]) && n[key] > 0 ? n[key] : 0), 0));
+    const max = Math.max(1, ...totals);
+    const step = width / nights.length, bw = step * .6, available = height - bottom;
+    const bars = nights.map((n, i) => {
+      let top = height - bottom;
+      let shapes = "";
+      for (const [key, cls] of categories) {
+        const count = Number.isInteger(n[key]) ? Math.max(0, n[key]) : 0;
+        if (!count) continue;
+        const part = (count / max) * available;
+        top -= part;
+        shapes += `<rect class="event-segment ${cls}" x="${(i+.5)*step-bw/2}"
+          y="${top}" width="${bw}" height="${part}">
+          <title>${escape(n.night + ": " + count + " " + key)}</title></rect>`;
+      }
+      return shapes;
+    }).join("");
+    return `<section class="plot"><div class="plot-title"><b>Respiratory events</b>
+      <span>counts per therapy night</span></div>
+      <div class="legend"><span class="oa">Obstructive</span><span class="ca">Central</span>
+        <span class="hyp">Hypopnoea</span></div>
+      <svg class="plot-svg event-svg" viewBox="0 0 ${width} ${height}"
+        preserveAspectRatio="none" role="img" aria-label="Nightly respiratory event counts">
+        <line class="axis" x1="0" x2="${width}" y1="${height-bottom}" y2="${height-bottom}"/>
+        ${bars}
+      </svg>
+      <div class="date-axis"><span>${escape(nights[0].night.slice(5))}</span>
+        <span>${escape(nights[nights.length-1].night.slice(5))}</span></div>
+    </section>`;
+  }
+
   _foot() {
     const nights = this._nights;
     if (!nights) return "";
     const goal = this._config.goal;
-    const met = nights.filter((n) => n.hours + 0.0001 >= goal).length;
+    const met = nights.filter((n) => Number.isFinite(n.hours) && n.hours + 0.0001 >= goal).length;
     const last = nights[nights.length - 1];
     const used = this._sibling("last_used");
 
     return `<footer>
-      <span class="big">${clock(last.hours)}</span>
-      <span class="since">${last.hours > 0 ? "last night" : "nothing last night"}</span>
+      <span class="big">${last.hours === null ? "—" : clock(last.hours)}</span>
+      <span class="since">${last.hours === null ? "invalid recorder data" : last.hours > 0 ? "last night" : "nothing last night"}</span>
       <span class="tally">${met} of ${nights.length} nights over ${goal} h</span>
       ${used && used.state !== "unknown" ? `<span class="tally">last used ${escape(shortDate(used.state))}</span>` : ""}
     </footer>`;
@@ -332,18 +530,66 @@ const STYLE = `
   .big { font-size: 24px; font-weight: 500; color: var(--primary-text-color); font-variant-numeric: tabular-nums; }
   .since, .tally { font-size: 12.5px; color: var(--secondary-text-color); }
   .tally { margin-left: auto; }
+  .dashboard { display: flex; flex-direction: column; gap: 16px; }
+  .stats { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; }
+  .stat { display: flex; flex-direction: column; gap: 4px; border-radius: 9px;
+          padding: 12px; min-width: 0; background: var(--secondary-background-color, rgba(128,128,128,.07)); }
+  .stat-label, .stat small { font-size: 11px; color: var(--secondary-text-color); }
+  .stat strong { font-size: 23px; font-weight: 600; font-variant-numeric: tabular-nums;
+                 line-height: 1.2; color: var(--primary-text-color); }
+  .stat-sub { font-size: 14px; color: var(--secondary-text-color); font-weight: 400; }
+  .plot { padding: 12px; border: 1px solid var(--divider-color, #ddd); border-radius: 9px; }
+  .plot-title { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+  .plot-title b { font-size: 13px; font-weight: 600; }
+  .plot-title span, .date-axis, .fineprint { font-size: 11px; color: var(--secondary-text-color); }
+  .plot-svg { height: 120px; margin-top: 8px; }
+  .plot-svg.event-svg { height: 95px; }
+  .plot-bar.ahi { fill: var(--primary-color, #03a9f4); }
+  .plot-bar.usage { fill: var(--success-color, #4caf50); }
+  .plot-bar.below-goal { fill: var(--warning-color, #ffa726); }
+  .axis { stroke: var(--divider-color, #aaa); stroke-width: 1; }
+  .target-line { stroke: var(--secondary-text-color, #888); stroke-width: 1;
+                 stroke-dasharray: 6 6; }
+  .missing-mark { stroke: var(--divider-color, #aaa); stroke-width: 3; }
+  .date-axis { display: flex; justify-content: space-between; }
+  .event-segment.oa { fill: var(--primary-color, #03a9f4); }
+  .event-segment.ca { fill: var(--warning-color, #ff9800); }
+  .event-segment.hyp { fill: var(--success-color, #4caf50); }
+  .legend { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 8px;
+            font-size: 11px; color: var(--secondary-text-color); }
+  .legend span::before { display: inline-block; width: 8px; height: 8px; margin-right: 5px;
+                          content: ""; border-radius: 2px; }
+  .legend .oa::before { background: var(--primary-color, #03a9f4); }
+  .legend .ca::before { background: var(--warning-color, #ff9800); }
+  .legend .hyp::before { background: var(--success-color, #4caf50); }
+  .history-heading { margin-bottom: 8px; font-weight: 600; font-size: 13px; }
+  .history-scroll { max-height: 280px; overflow: auto; }
+  .history-scroll table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  .history-scroll th, .history-scroll td { padding: 7px 5px; white-space: nowrap;
+                                           border-bottom: 1px solid var(--divider-color, #ddd); }
+  .history-scroll th { font-weight: 600; color: var(--secondary-text-color);
+                       text-align: right; position: sticky; top: 0;
+                       background: var(--card-background-color, var(--ha-card-background, #fff)); }
+  .history-scroll th:first-child { text-align: left; }
+  .history-scroll td { text-align: right; font-variant-numeric: tabular-nums; }
+  .history-scroll td:first-child { text-align: left; }
+  .fineprint { margin: 0; line-height: 1.55; }
+  @media (max-width: 520px) {
+    .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .stat strong { font-size: 20px; }
+  }
   .problem { margin: 0; font-size: 13px; color: var(--error-color, var(--secondary-text-color)); }
 `;
 
-customElements.define("airsupply-card", AirsupplyCard);
+customElements.define("airsupply-extended-card", AirsupplyCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "airsupply-card",
-  name: "airsupply",
-  description: "Hours of CPAP therapy each night, against the four-hour mark.",
+  type: "airsupply-extended-card",
+  name: "AirSupply Extended",
+  description: "AirMini therapy history: AHI, usage and respiratory events.",
   preview: true,
-  documentationURL: "https://github.com/ananthb/airsupply",
+  documentationURL: "https://github.com/rnodern/airsupply-extended",
 });
 
 console.info("%c airsupply-card ", "background:#0d7f74;color:#fff;border-radius:3px", "loaded");

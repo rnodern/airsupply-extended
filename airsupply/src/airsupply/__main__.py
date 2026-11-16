@@ -17,6 +17,7 @@ page.
 import asyncio
 import logging
 import os
+import signal
 import sys
 
 from dbus_next import BusType
@@ -46,15 +47,42 @@ async def run():
     log.debug("Connected to the system bus.")
 
     controller = Controller(bus, version)
-    await controller.start()
-    await web.serve(web.make_app(controller), port)
+    runner = None
+    shutdown = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (signal.SIGTERM, signal.SIGINT):
+        try:
+            loop.add_signal_handler(sig, shutdown.set)
+        except NotImplementedError:
+            pass
 
-    # Run until the bus goes away, which is the one thing we cannot recover
-    # from in place. Exiting lets the Supervisor restart us against a fresh
-    # BlueZ.
-    await bus.wait_for_disconnect()
-    log.error("Lost the system bus.")
-    return 1
+    try:
+        await controller.start()
+        runner = await web.serve(web.make_app(controller), port)
+
+        # A normal container stop should release our SPP descriptor/profile.
+        # An unexpected D-Bus disconnect still exits for Supervisor restart.
+        bus_lost = asyncio.create_task(bus.wait_for_disconnect())
+        stopping = asyncio.create_task(shutdown.wait())
+        try:
+            done, _ = await asyncio.wait(
+                (bus_lost, stopping), return_when=asyncio.FIRST_COMPLETED
+            )
+            if bus_lost in done and not shutdown.is_set():
+                log.error("Lost the system bus.")
+                return 1
+            log.info("Shutdown requested; releasing our Bluetooth sessions.")
+            return 0
+        finally:
+            for task in (bus_lost, stopping):
+                if not task.done():
+                    task.cancel()
+            await asyncio.gather(bus_lost, stopping, return_exceptions=True)
+    finally:
+        if runner is not None:
+            await runner.cleanup()
+        await controller.stop()
+        bus.disconnect()
 
 
 def main():

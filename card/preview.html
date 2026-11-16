@@ -8,7 +8,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>airsupply card preview</title>
+<title>AirSupply Extended — Dashboard Preview</title>
 <style>
   :root {
     --primary-text-color: #212121; --secondary-text-color: #727272;
@@ -24,15 +24,16 @@
   }
   body { font-family: system-ui, sans-serif; margin: 0; padding: 28px;
          background: #f2f3f5; display: flex; flex-direction: column; gap: 18px; align-items: center; }
-  .frame { width: 100%; max-width: 420px; }
+  .frame { width: 100%; max-width: 860px; }
+  .frame.compact { max-width: 420px; }
   button { font: inherit; padding: 6px 12px; border-radius: 8px; border: 1px solid #ccc;
            background: #fff; cursor: pointer; }
 </style>
 </head>
 <body>
 <button onclick="document.body.classList.toggle('dark')">Toggle dark</button>
-<div class="frame"><airsupply-card id="one"></airsupply-card></div>
-<div class="frame"><airsupply-card id="two"></airsupply-card></div>
+<div class="frame"><airsupply-extended-card id="one"></airsupply-extended-card></div>
+<div class="frame compact"><airsupply-extended-card id="two"></airsupply-extended-card></div>
 
 <script type="module">
   // ha-card is Home Assistant's; here it is a rounded box.
@@ -73,9 +74,28 @@
   });
 
   const asleep = "sensor.airsupply_28_68_47_18_c2_78_therapy_hours";
+  // Invented therapy nights to preview the new dashboard without patient data.
+  const fakeNightly = Array.from({length: 14}, (_, i) => {
+    const d = new Date();
+    d.setHours(12, 0, 0, 0);
+    d.setDate(d.getDate() - (13 - i));
+    const usage = nights[i];
+    const oa = i % 6, ca = i % 5 === 0 ? 1 : 0, hyp = i % 4;
+    const events = oa + ca + hyp;
+    return {
+      night: [d.getFullYear(), String(d.getMonth() + 1).padStart(2, "0"),
+              String(d.getDate()).padStart(2, "0")].join("-"),
+      usage_hours: usage, ahi: usage ? Number((events / usage).toFixed(2)) : null,
+      ahi_events: events, obstructive_apnoeas: oa, central_apnoeas: ca,
+      hypopnoeas: hyp, rera: i % 3,
+    };
+  });
   const one = document.getElementById("one");
   one.setConfig({ entity: asleep });
   one.hass = hass(asleep, {
+    "sensor.airsupply_28_68_47_18_c2_78_history_nights": {
+      state: "14", attributes: { nights: fakeNightly }
+    },
     "sensor.airsupply_28_68_47_18_c2_78_status": { state: "Standby" },
     "binary_sensor.airsupply_28_68_47_18_c2_78_in_therapy": { state: "off" },
     "binary_sensor.airsupply_28_68_47_18_c2_78_connected": { state: "on" },
@@ -84,7 +104,7 @@
 
   const other = "sensor.airsupply_3a_11_00_00_00_02_therapy_hours";
   const two = document.getElementById("two");
-  two.setConfig({ entity: other, title: "AirMini (Subha)" });
+  two.setConfig({ entity: other, title: "Original usage-only view", view: "usage" });
   two.hass = hass(other, {
     "binary_sensor.airsupply_3a_11_00_00_00_02_in_therapy": { state: "on" },
     "binary_sensor.airsupply_3a_11_00_00_00_02_connected": { state: "on" },

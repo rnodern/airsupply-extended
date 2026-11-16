@@ -145,6 +145,71 @@ SENSORS = (
         "icon": "mdi:gauge",
     },
     {
+        "key": "history_nights",
+        "name": "Therapy history",
+        "read": None,
+        "path": ("history_nights",),
+        "kind": "number",
+        "icon": "mdi:chart-timeline-variant",
+        "entity_category": "diagnostic",
+    },
+    {
+        "key": "night_date",
+        "name": "Latest therapy night",
+        "read": None,
+        "path": ("night_date",),
+        "kind": "text",
+        "icon": "mdi:calendar-night",
+    },
+    {
+        "key": "night_usage_hours",
+        "name": "Latest night usage",
+        "read": None,
+        "path": ("night_usage_hours",),
+        "kind": "number",
+        "device_class": "duration",
+        "unit_of_measurement": "h",
+        "state_class": "measurement",
+        "icon": "mdi:sleep",
+    },
+    {
+        "key": "night_ahi",
+        "name": "Latest night AHI",
+        "read": None,
+        "path": ("night_ahi",),
+        "kind": "number",
+        "unit_of_measurement": "events/h",
+        "state_class": "measurement",
+        "icon": "mdi:chart-line",
+    },
+    {
+        "key": "night_obstructive",
+        "name": "Latest night obstructive apnoeas",
+        "read": None,
+        "path": ("night_obstructive",),
+        "kind": "number",
+        "state_class": "measurement",
+        "icon": "mdi:chart-bar",
+    },
+    {
+        "key": "night_central",
+        "name": "Latest night central apnoeas",
+        "read": None,
+        "path": ("night_central",),
+        "kind": "number",
+        "state_class": "measurement",
+        "icon": "mdi:chart-bar",
+    },
+    {
+        "key": "night_hypopnoeas",
+        "name": "Latest night hypopnoeas",
+        "read": None,
+        "path": ("night_hypopnoeas",),
+        "kind": "number",
+        "state_class": "measurement",
+        "icon": "mdi:chart-bar",
+    },
+    {
         "key": "last_read",
         "name": "Last read",
         "read": None,
@@ -222,7 +287,11 @@ def discovery(address, machine_name, person_name, firmware, version, keys):
             "object_id": f"airsupply_{node(address)}_{sensor['key']}",
             "state_topic": state_topic(address),
             "value_template": "{{ value_json." + sensor["key"] + " }}",
-            "json_attributes_topic": attributes_topic(address),
+            "json_attributes_topic": (
+                f"airsupply/{node(address)}/nights"
+                if sensor["key"] == "history_nights"
+                else attributes_topic(address)
+            ),
             "availability_topic": STATUS_TOPIC,
             "payload_available": ONLINE,
             "payload_not_available": OFFLINE,
@@ -284,7 +353,7 @@ def _active_profile(settings):
     return {}
 
 
-def state(results, read_at, connected=None):
+def state(results, read_at, connected=None, latest_night=None, history_count=None):
     """The state document every entity for this machine reads from.
 
     One retained message rather than one topic per entity: the reading is
@@ -301,7 +370,18 @@ def state(results, read_at, connected=None):
     sources = {
         "MachineMetrics": ok.get("MachineMetrics") or {},
         "Settings": {**settings, "therapy": _active_profile(settings)},
-        None: {"read_at": read_at},
+        None: {
+            "read_at": read_at,
+            **({"history_nights": history_count} if history_count is not None else {}),
+            **({
+                "night_date": latest_night["night"],
+                "night_usage_hours": latest_night.get("usage_hours"),
+                "night_ahi": latest_night.get("ahi"),
+                "night_obstructive": latest_night.get("obstructive_apnoeas"),
+                "night_central": latest_night.get("central_apnoeas"),
+                "night_hypopnoeas": latest_night.get("hypopnoeas"),
+            } if latest_night else {}),
+        },
     }
 
     out = {}

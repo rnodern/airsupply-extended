@@ -34,7 +34,8 @@ const sleep = [
   hour(2026, 8, 26, 2, { change: 1 }),
   hour(2026, 8, 26, 3, { change: 2.5 }),
 ];
-const folded = card._fold(sleep);
+const testNow = new Date(2026, 8, 26, 12, 0);
+const folded = card._fold(sleep, testNow);
 const night = folded.find((n) => n.at === noonOn(2026, 8, 25));
 check("a sleep across midnight is one night", night ? Math.round(night.hours * 10) / 10 : null, 6.5);
 check("fourteen nights come back", folded.length, 14);
@@ -45,14 +46,14 @@ const old = card._fold([
   hour(2026, 8, 25, 23, { sum: 100 }),
   hour(2026, 8, 26, 0, { sum: 101 }),
   hour(2026, 8, 26, 1, { sum: 102.5 }),
-]);
+], testNow);
 const oldNight = old.find((n) => n.at === noonOn(2026, 8, 25));
 check("a running sum is differenced", oldNight ? Math.round(oldNight.hours * 10) / 10 : null, 2.5);
 
 const reset = card._fold([
   hour(2026, 8, 25, 23, { change: 2 }),
   hour(2026, 8, 26, 1, { change: -900 }),
-]);
+], testNow);
 const resetNight = reset.find((n) => n.at === noonOn(2026, 8, 25));
 check("a meter reset does not make a negative night", resetNight ? resetNight.hours : null, 2);
 

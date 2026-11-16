@@ -47,6 +47,14 @@ RADIO_SETTLE = 2.0
 PAIR_ATTEMPTS = 3
 PAIR_RETRY_PAUSE = 4.0
 
+# A paired device may not answer a Classic Bluetooth page immediately after
+# leaving the phone app or a previous session. Reconnect using a bounded
+# discovery / settle / retry sequence rather than waiting 15 minutes.
+# A genuine second client can still prevent a connection: never steal it.
+RECONNECT_ATTEMPTS = max(1, min(5, int(os.environ.get("AIRSUPPLY_RECONNECT_ATTEMPTS") or 3)))
+RECONNECT_SCAN_SECONDS = max(2, min(20, int(os.environ.get("AIRSUPPLY_RECONNECT_SCAN_SECONDS") or 8)))
+RECONNECT_RETRY_PAUSE = max(2.0, min(60.0, float(os.environ.get("AIRSUPPLY_RECONNECT_RETRY_PAUSE") or 8)))
+
 PAGE_TIMEOUT_ADVICE = "No answer. Put the machine in pairing mode and try again."
 
 
@@ -133,6 +141,11 @@ class Controller:
         self.released = set()
 
         self.publisher = mqtt.Publisher(version)
+        # Opt in only after the device clock offset has been measured.
+        self.history = None
+        if os.environ.get("AIRSUPPLY_HISTORY_ENABLED", "0") == "1":
+            from .history_sync import HistoryManager
+            self.history = HistoryManager()
         self.people = []
         self.people_problem = None
         self.log = collections.deque(maxlen=LOG_LINES)
@@ -162,12 +175,44 @@ class Controller:
             log.error("Could not register a pairing agent: %s", err)
             log.error("The Bluetooth bond step will not work from this page.")
 
-        self.profile = await spp.register(self.bus)
+        self.profile = await spp.register(self.bus, on_incoming=self._accept_incoming)
         await self.refresh(force=True)
 
         self.publisher.start()
         await self.refresh_people()
         self._schedule_task = asyncio.create_task(self._schedule())
+
+    async def stop(self):
+        """Gracefully release only sessions that this process actually owns.
+
+        Docker sends SIGTERM when an image is replaced. Without an explicit
+        shutdown path, the process exits before telling BlueZ to disconnect
+        its held SPP profile. The next process may then see an 'already
+        connected' link without owning a usable RFCOMM descriptor.
+        """
+        pending = [
+            task for task in (
+                self._schedule_task, self._scan_task, self._task,
+            ) if task is not None and not task.done()
+        ]
+        if self._scan_stop is not None:
+            self._scan_stop.set()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for address in list(self.sessions):
+            try:
+                await asyncio.wait_for(self._release(address), timeout=3)
+            except Exception as err:  # noqa: BLE001 -- shutdown is best effort
+                log.warning("Could not fully release %s on shutdown: %s.",
+                            address, type(err).__name__)
+
+        if self.profile is not None:
+            self.profile.close()
+        await self.publisher.stop()
+        log.info("Stopped AirSupply; released owned Bluetooth sessions.")
 
     async def refresh_people(self):
         """Who Home Assistant knows about, so a machine can belong to one."""
@@ -181,6 +226,46 @@ class Controller:
         except hass.Unavailable as err:
             self.people_problem = str(err)
             log.warning("Could not ask Home Assistant who lives here: %s", err)
+
+    def _accept_incoming(self, device_path):
+        """Vet an inbound SPP connection and request a normal read.
+
+        BlueZ authenticates the link, but a trusted device alone cannot
+        authorise AirSupply to access stored therapy data. The peer must be
+        a machine registered in our local store and have a saved application
+        pairing key. Deliberately released devices never auto-reconnect.
+        """
+        match = re.search(r"/dev_([0-9A-Fa-f_]{17})$", device_path)
+        if match is None:
+            return False
+        address = match.group(1).replace("_", ":").upper()
+        if address in self.released or address in self.sessions:
+            return False
+        saved = store.machines().get(address)
+        if not saved or not saved.get("paired"):
+            return False
+        if not store.master_pair_key(address):
+            return False
+
+        # The Profile1 handler will cache the fd after this returns; defer
+        # consumption until the callback has completed.
+        loop = asyncio.get_running_loop()
+        loop.call_soon(self._schedule_incoming, address)
+        return True
+
+    def _schedule_incoming(self, address):
+        if address in self.released or address in self.sessions:
+            return
+        if self.busy:
+            # The in-flight outbound read can consume the incoming fd from
+            # its existing Profile1 expectation; otherwise the schedule
+            # will pick it up after the current operation.
+            log.info("Incoming AirMini connection queued during %s.", self.busy)
+            return
+        try:
+            self._spawn("read", lambda: self._read(address))
+        except Busy:
+            pass
 
     def _paired(self):
         """Machines there is a key for, so they can be read without anybody."""
@@ -383,9 +468,10 @@ class Controller:
         record = store.machines().get(address) or {}
         person = next((p for p in self.people if p.id == record.get("person_id")), None)
         reading = self.readings.get(address) or {}
+        nights = self.history.recent(address) if self.history is not None else None
         self.publisher.publish(address, record.get("name") or "", person,
                                reading.get("results"), reading.get("at_iso"),
-                               address in self.sessions)
+                               address in self.sessions, nights=nights)
 
     def _republish(self, address):
 
@@ -528,6 +614,8 @@ class Controller:
             self.released.discard(gone)
             self.publisher.forget(gone)
             store.forget(gone)
+            if self.history is not None:
+                self.history.forget(gone)
             self.readings.pop(gone, None)
         self.selected = store.selected()
         self.session_state = None
@@ -548,7 +636,41 @@ class Controller:
             return held
         if held is not None:
             await self._release(address)
+        if pin is None:
+            return await self._reconnect(address)
         return await self._connect(address, pin)
+
+    async def _reconnect(self, address):
+        """Try the existing application key without unpairing or stealing SPP.
+
+        A transient page/profile error triggers a short Classic inquiry. This
+        refreshes BlueZ's remote clock offset and page-scan information before
+        another attempt. Failed attempts never erase the stored pairing key.
+        """
+        for attempt in range(1, RECONNECT_ATTEMPTS + 1):
+            try:
+                held = await self._connect(address)
+                if attempt > 1:
+                    log.info("Reconnected to %s on attempt %d/%d.",
+                             address, attempt, RECONNECT_ATTEMPTS)
+                return held
+            except spp.NotReachable as err:
+                if not err.retryable or attempt == RECONNECT_ATTEMPTS:
+                    raise
+                log.warning("Bluetooth reconnect %d/%d: %s.",
+                            attempt, RECONNECT_ATTEMPTS, err)
+                # A manually started scan owns its own inquiry: don't start a
+                # competing scan or touch the Bluetooth bond.
+                if not self.scanning and self.adapter:
+                    try:
+                        self.scan(RECONNECT_SCAN_SECONDS)
+                        await self._scan_finished()
+                        await self.refresh(force=True)
+                    except Exception as scan_err:  # noqa: BLE001
+                        log.info("Bluetooth discovery refresh skipped: %s",
+                                 type(scan_err).__name__)
+                await asyncio.sleep(RECONNECT_RETRY_PAUSE)
+        raise RuntimeError("Reconnect attempts exhausted")
 
     async def _connect(self, address, pin=None):
         dev = next((d for d in self.devices if d["address"] == address), None)
@@ -648,6 +770,14 @@ class Controller:
                 results[title] = {"ok": False, "error": str(err)}
                 log.error("%s failed: %s", title, err)
                 failures += 1
+        if self.history is not None and self.history.is_due(address):
+            try:
+                received, nights = await self.history.sync(session, address)
+                log.info("Historical sync completed: %d notifications, %d nights.",
+                         received, nights)
+            except Exception as err:  # noqa: BLE001
+                # A failed historical sync must not suppress standard sensors.
+                log.warning("Historical sync deferred: %s", type(err).__name__)
         self.readings[address] = {
             "results": results,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
