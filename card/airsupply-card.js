@@ -25,7 +25,8 @@ const DAY = 86400000;
 class AirsupplyCard extends HTMLElement {
   static getStubConfig(hass) {
     const guess = Object.keys(hass?.states || {}).find(
-      (id) => id.startsWith("sensor.airsupply_") && id.endsWith("_therapy_hours"),
+      (id) => id.startsWith("sensor.") && id.endsWith("_therapy_hours") &&
+        (id.includes("resmed") || id.includes("airsupply")),
     );
     return { entity: guess || "sensor.airsupply_therapy_hours" };
   }
@@ -39,6 +40,7 @@ class AirsupplyCard extends HTMLElement {
       goal: GOAL_HOURS,
       only_owner: false,
       view: "dashboard",
+      history_entity: null,
       ...config,
     };
     this._nights = null;
@@ -57,7 +59,7 @@ class AirsupplyCard extends HTMLElement {
       return;
     }
     this.style.display = "";
-    this._load();
+    if (this._config.view === "usage") this._load();
     this._render();
   }
 
@@ -137,7 +139,9 @@ class AirsupplyCard extends HTMLElement {
     const out = [];
     for (let i = this._config.nights - 1; i >= 0; i -= 1) {
       const at = latest - i * DAY;
-      out.push({ at, hours: buckets.get(at) || 0 });
+      const hours = buckets.get(at) || 0;
+      // A 29-hour therapy night is a broken recorder delta, not therapy.
+      out.push({ at, hours: hours > 25 ? null : hours });
     }
     return out;
   }
@@ -177,12 +181,19 @@ class AirsupplyCard extends HTMLElement {
       return;
     }
 
+    const usageOnly = this._config.view === "usage";
+    const history = usageOnly ? null : this._history();
     wrap.innerHTML = [
       this._head(),
-      this._config.view === "usage" || !this._history()
+      usageOnly
         ? (this._problem ? `<p class="problem">${escape(this._problem)}</p>` : this._chart())
-        : this._dashboard(),
-      this._config.view === "usage" || !this._history() ? this._foot() : "",
+        : history
+          ? this._dashboard()
+          : `<p class="problem">Nightly history is not available.
+             Check the MQTT “Therapy history” entity, then add
+             <code>history_entity: sensor.your_actual_therapy_history_id</code>
+             to this card. The card will not guess usage from the cumulative meter.</p>`,
+      usageOnly ? this._foot() : "",
     ].join("");
   }
 
@@ -225,6 +236,10 @@ class AirsupplyCard extends HTMLElement {
     const bars = nights
       .map((night, i) => {
         const x = i * step + gap / 2;
+        if (night.hours === null) {
+          return `<line class="empty" x1="${x + width / 2}" y1="${H}"
+            x2="${x + width / 2}" y2="${H - 3}"><title>Invalid recorder total</title></line>`;
+        }
         const height = H - y(night.hours);
         const short = night.hours + 0.0001 < goal;
         const label = `${dayName(night.at)} ${clock(night.hours)}`;
@@ -249,19 +264,43 @@ class AirsupplyCard extends HTMLElement {
 
   /* --- AirSupply Extended nightly dashboard ----------------------------- */
 
+  _historySensor() {
+    const states = this._hass?.states || {};
+    const entity = this._config.entity || "";
+    const stem = entity.replace(/^sensor\./, "").replace(/_therapy_hours$/, "");
+    const explicit = this._config.history_entity;
+    const ids = explicit ? [explicit] : [
+      `sensor.${stem}_therapy_history`,
+      `sensor.${stem}_history_nights`,
+    ];
+    for (const id of ids) {
+      const item = states[id];
+      if (Array.isArray(item?.attributes?.nights)) return item;
+    }
+    if (explicit) return null;
+
+    // A device's MQTT unique_id is not necessarily its Home Assistant entity_id.
+    // Only select a history sensor attributable to this machine.
+    const address = states[entity]?.attributes?.address;
+    const candidates = Object.entries(states).filter(([id, item]) =>
+      id.startsWith("sensor.") && Array.isArray(item?.attributes?.nights) &&
+      (id.startsWith(`sensor.${stem}_`) ||
+       (address && item.attributes.address === address)));
+    return candidates.length === 1 ? candidates[0][1] : null;
+  }
+
   _history() {
-    const sensor = this._sibling("history_nights");
-    const items = sensor?.attributes?.nights;
+    const items = this._historySensor()?.attributes?.nights;
     if (!Array.isArray(items) || !items.length) return null;
-    // Filter malformed MQTT attributes and display only requested nights.
     const byDate = new Map();
     for (const item of items) {
       if (!item || typeof item.night !== "string" ||
           !/^\d{4}-\d{2}-\d{2}$/.test(item.night)) continue;
       byDate.set(item.night, item);
     }
-    return [...byDate.values()].sort((a, b) => a.night.localeCompare(b.night))
+    const rows = [...byDate.values()].sort((a, b) => a.night.localeCompare(b.night))
       .slice(-Math.max(1, Math.min(31, Number(this._config.nights) || 14)));
+    return rows.length ? rows : null;
   }
 
   _dashboard() {
@@ -407,13 +446,13 @@ class AirsupplyCard extends HTMLElement {
     const nights = this._nights;
     if (!nights) return "";
     const goal = this._config.goal;
-    const met = nights.filter((n) => n.hours + 0.0001 >= goal).length;
+    const met = nights.filter((n) => Number.isFinite(n.hours) && n.hours + 0.0001 >= goal).length;
     const last = nights[nights.length - 1];
     const used = this._sibling("last_used");
 
     return `<footer>
-      <span class="big">${clock(last.hours)}</span>
-      <span class="since">${last.hours > 0 ? "last night" : "nothing last night"}</span>
+      <span class="big">${last.hours === null ? "—" : clock(last.hours)}</span>
+      <span class="since">${last.hours === null ? "invalid recorder data" : last.hours > 0 ? "last night" : "nothing last night"}</span>
       <span class="tally">${met} of ${nights.length} nights over ${goal} h</span>
       ${used && used.state !== "unknown" ? `<span class="tally">last used ${escape(shortDate(used.state))}</span>` : ""}
     </footer>`;
