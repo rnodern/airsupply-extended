@@ -542,12 +542,12 @@ const STYLE = `
   .problem { margin: 0; font-size: 13px; color: var(--error-color, var(--secondary-text-color)); }
 `;
 
-customElements.define("airsupply-card", AirsupplyCard);
+customElements.define("airsupply-extended-card", AirsupplyCard);
 
 window.customCards = window.customCards || [];
 window.customCards.push({
-  type: "airsupply-card",
-  name: "airsupply",
+  type: "airsupply-extended-card",
+  name: "AirSupply Extended",
   description: "AirMini therapy history: AHI, usage and respiratory events.",
   preview: true,
   documentationURL: "https://github.com/rnodern/airsupply-extended",
