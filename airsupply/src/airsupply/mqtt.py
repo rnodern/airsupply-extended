@@ -114,7 +114,9 @@ class Publisher:
         """One machine's reading, and its description if that has changed."""
         if not configured():
             return
-        state = entities.state(results, read_at, connected, latest_night=nights[0] if nights else None)
+        state = entities.state(results, read_at, connected,
+                               latest_night=nights[0] if nights else None,
+                               history_count=len(nights) if nights is not None else None)
         firmware = entities.firmware_of(results)
         person_name = person.name if person else None
         shape = (machine_name, person_name, firmware, tuple(sorted(state)))
@@ -130,7 +132,11 @@ class Publisher:
         self._send(entities.attributes_topic(address), entities.attributes(address, person, firmware))
         self._send(entities.state_topic(address), state)
         if nights is not None:
-            self._send(f"airsupply/{entities.node(address)}/nights", {"nights": nights})
+            self._send(f"airsupply/{entities.node(address)}/nights", {
+                "nights": nights,
+                "count": len(nights),
+                "latest_night": nights[0]["night"] if nights else None,
+            })
 
     def forget(self, address):
         """Take a machine's entities out of Home Assistant.
