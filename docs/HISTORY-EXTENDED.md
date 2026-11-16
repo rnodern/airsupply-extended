@@ -71,3 +71,28 @@ GitHub Actions runs the existing `CI` workflow on pull-request updates. The
 AirSupply container (including its bundled libairmini).
 Do not merge this draft PR or deploy to the AirMini until both jobs pass and
 hardware behaviour has been checked independently.
+
+## Bluetooth reconnect development (not yet deployed)
+
+AirSupply Extended now retries paired-device serial transport failures with
+up to three bounded attempts. After a transient BlueZ page timeout,
+already-connected/in-progress or refused error, it performs a brief BR/EDR
+inquiry, allows the adapter to settle and retries the *existing* saved
+application key. An inactive machine might still refuse attempts until its
+Bluetooth button is pressed: this is not guaranteed to bypass firmware
+limits. Never reset pairing, erase the saved key, force-disconnect an active
+phone connection or write device settings.
+
+Relevant environment settings (optional):
+
+```text
+AIRSUPPLY_RECONNECT_ATTEMPTS=3
+AIRSUPPLY_RECONNECT_SCAN_SECONDS=8
+AIRSUPPLY_RECONNECT_RETRY_PAUSE=8
+```
+
+The BlueZ serial profile now bounds each connection stage and cleans up failed
+pending file descriptors. For validation, test three scenarios independently
+on the Pi: standby reconnect after idle; Bluetooth recovery after restarting
+AirSupply; and phone-app connection/disconnection. Collect **only sanitized**
+log messages and timings. The fix must not interfere with therapy.
