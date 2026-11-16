@@ -80,7 +80,11 @@ class SerialProfile(ServiceInterface):
             log.debug("Channel open for %s on fd %s, %s", device, fd, props)
             future.set_result((device, fd, props))
         else:
-            # Nobody is waiting; do not leak the descriptor.
+            # In dual-role diagnostic mode an unsolicited inbound connection
+            # is possible. Don't let an unknown peer take over the app, or
+            # leak the descriptor. A later change can explicitly accept it.
+            log.info("Unsolicited inbound RFCOMM connection from %s; closed.",
+                     device)
             close(fd)
 
     @method()
@@ -95,6 +99,25 @@ class SerialProfile(ServiceInterface):
         log.info("Serial profile released.")
 
 
+def profile_options(*, dual_role=False):
+    """Build BlueZ options without forcing the default dual role off.
+
+    BlueZ enables client and server for Serial Port Profile by default.
+    Passing Role=client prevents the local SDP service from being advertised;
+    a paired AirMini was observed querying the Pi for that record. Enable the
+    experimental dual role only when opted in, retaining outbound connections.
+    """
+    options = {
+        "Name": Variant("s", "airsupply"),
+        "AutoConnect": Variant("b", False),
+        "RequireAuthentication": Variant("b", True),
+        "RequireAuthorization": Variant("b", False),
+    }
+    if not dual_role:
+        options["Role"] = Variant("s", "client")
+    return options
+
+
 async def register(bus):
     """Export our Profile1 and register it for the SPP UUID."""
     profile = SerialProfile()
@@ -104,21 +127,17 @@ async def register(bus):
     obj = bus.get_proxy_object(c.BLUEZ, c.BLUEZ_ROOT, introspection)
     manager = obj.get_interface(c.PROFILE_MANAGER)
 
-    # Role "client": we are connecting out to the machine, not listening.
-    # Channel is left to SDP; SPP_CHANNEL is recorded in constants as the value
-    # to expect, not to force.
+    # With Role omitted BlueZ registers *both* client and server. That
+    # advertises a local Serial Port SDP record, while preserving existing
+    # outbound ConnectProfile behaviour. This is opt-in until hardware tested.
+    dual_role = os.environ.get("AIRSUPPLY_SPP_DUAL_ROLE", "0") == "1"
     await manager.call_register_profile(
         c.PROFILE_PATH,
         c.SPP_UUID,
-        {
-            "Name": Variant("s", "airsupply"),
-            "Role": Variant("s", "client"),
-            "AutoConnect": Variant("b", False),
-            "RequireAuthentication": Variant("b", True),
-            "RequireAuthorization": Variant("b", False),
-        },
+        profile_options(dual_role=dual_role),
     )
-    log.debug("Registered the serial profile at %s", c.PROFILE_PATH)
+    log.info("Registered Bluetooth SPP profile (%s).",
+             "dual-role diagnostic" if dual_role else "outbound client")
     return profile
 
 
