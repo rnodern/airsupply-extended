@@ -275,24 +275,24 @@ class AirsupplyCard extends HTMLElement {
     const averageAHI = hours > 0 ? events / hours : null;
     const overGoal = valid.filter((n) => n.usage_hours >= this._config.goal).length;
 
-    return \`<div class="dashboard">
+    return `<div class="dashboard">
       <div class="stats">
         <div class="stat"><span class="stat-label">Latest AHI</span>
-          <strong>\${this._number(latest.ahi)}</strong>
+          <strong>${this._number(latest.ahi)}</strong>
           <small>events per hour</small></div>
         <div class="stat"><span class="stat-label">Latest usage</span>
-          <strong>\${this._hours(latest.usage_hours)}</strong>
-          <small>\${escape(latest.night)}</small></div>
+          <strong>${this._hours(latest.usage_hours)}</strong>
+          <small>${escape(latest.night)}</small></div>
         <div class="stat"><span class="stat-label">Average AHI</span>
-          <strong>\${this._number(averageAHI)}</strong>
-          <small>weighted by usage · \${valid.length} nights</small></div>
+          <strong>${this._number(averageAHI)}</strong>
+          <small>weighted by usage · ${valid.length} nights</small></div>
         <div class="stat"><span class="stat-label">Usage goal</span>
-          <strong>\${overGoal}<span class="stat-sub"> / \${valid.length}</span></strong>
-          <small>nights ≥ \${escape(this._config.goal)} h</small></div>
+          <strong>${overGoal}<span class="stat-sub"> / ${valid.length}</span></strong>
+          <small>nights ≥ ${escape(this._config.goal)} h</small></div>
       </div>
-      \${this._metricChart(nights, "ahi", "AHI trend", "events/h", "ahi")}
-      \${this._metricChart(nights, "usage_hours", "Therapy usage", "hours", "usage")}
-      \${this._eventChart(nights)}
+      ${this._metricChart(nights, "ahi", "AHI trend", "events/h", "ahi")}
+      ${this._metricChart(nights, "usage_hours", "Therapy usage", "hours", "usage")}
+      ${this._eventChart(nights)}
       <div class="history-table">
         <div class="history-heading">Nightly breakdown</div>
         <div class="history-scroll"><table><thead><tr>
@@ -300,20 +300,20 @@ class AirsupplyCard extends HTMLElement {
           <th scope="col">AHI</th><th scope="col">OA</th>
           <th scope="col">CA</th><th scope="col">H</th>
           <th scope="col">RERA</th>
-        </tr></thead><tbody>\${nights.slice().reverse().map((n) => \`<tr>
-          <td>\${escape(n.night)}</td><td>\${this._hours(n.usage_hours)}</td>
-          <td>\${this._number(n.ahi)}</td>
-          <td>\${this._count(n.obstructive_apnoeas)}</td>
-          <td>\${this._count(n.central_apnoeas)}</td>
-          <td>\${this._count(n.hypopnoeas)}</td>
-          <td>\${this._count(n.rera)}</td>
-        </tr>\`).join("")}</tbody></table></div>
+        </tr></thead><tbody>${nights.slice().reverse().map((n) => `<tr>
+          <td>${escape(n.night)}</td><td>${this._hours(n.usage_hours)}</td>
+          <td>${this._number(n.ahi)}</td>
+          <td>${this._count(n.obstructive_apnoeas)}</td>
+          <td>${this._count(n.central_apnoeas)}</td>
+          <td>${this._count(n.hypopnoeas)}</td>
+          <td>${this._count(n.rera)}</td>
+        </tr>`).join("")}</tbody></table></div>
       </div>
       <p class="fineprint">AHI is calculated from logged events and therapy time, not a
       clinical assessment. OA = obstructive apnoea, CA = central apnoea,
       H = hypopnoea. RERA is excluded from AHI. Leak and pressure
       are withheld pending unit validation.</p>
-    </div>\`;
+    </div>`;
   }
 
   _number(value) {
@@ -328,7 +328,7 @@ class AirsupplyCard extends HTMLElement {
   _hours(value) {
     if (!Number.isFinite(value) || value < 0) return "—";
     const minutes = Math.round(value * 60);
-    return \`\${Math.floor(minutes / 60)}h \${String(minutes % 60).padStart(2, "0")}m\`;
+    return `${Math.floor(minutes / 60)}h ${String(minutes % 60).padStart(2, "0")}m`;
   }
 
   _metricChart(nights, key, title, units, kind) {
@@ -341,27 +341,27 @@ class AirsupplyCard extends HTMLElement {
     const colours = kind === "usage" ? "usage" : "ahi";
     const marks = nights.map((n, i) => {
       const value = values[i], cx = (i + .5) * step;
-      if (value === null) return \`<line class="missing-mark" x1="\${cx}" y1="\${height-margin-4}"
-        x2="\${cx}" y2="\${height-margin}"/>\`;
+      if (value === null) return `<line class="missing-mark" x1="${cx}" y1="${height-margin-4}"
+        x2="${cx}" y2="${height-margin}"/>`;
       const vHeight = Math.max(value === 0 ? 2 : 3, height - margin - scale(value));
       const css = kind === "usage" && value < this._config.goal ? " below-goal" : "";
-      const label = \`\${n.night}: \${value.toFixed(2)} \${units}\`;
-      return \`<rect class="plot-bar \${colours}\${css}" x="\${cx-bw/2}" y="\${height-margin-vHeight}"
-        width="\${bw}" height="\${vHeight}" rx="2"><title>\${escape(label)}</title></rect>\`;
+      const label = `${n.night}: ${value.toFixed(2)} ${units}`;
+      return `<rect class="plot-bar ${colours}${css}" x="${cx-bw/2}" y="${height-margin-vHeight}"
+        width="${bw}" height="${vHeight}" rx="2"><title>${escape(label)}</title></rect>`;
     }).join("");
-    const goal = kind === "usage" ? \`<line class="target-line" x1="0" x2="\${width}"
-      y1="\${scale(this._config.goal)}" y2="\${scale(this._config.goal)}"/>\` : "";
-    return \`<section class="plot">
-      <div class="plot-title"><b>\${escape(title)}</b>
-        <span>\${kind === "usage" ? escape(this._config.goal + "h goal") : "lower is generally better"}</span></div>
-      <svg class="plot-svg" viewBox="0 0 \${width} \${height}" preserveAspectRatio="none"
-        role="img" aria-label="\${escape(title + " for " + nights.length + " nights")}">
-        <line class="axis" x1="0" x2="\${width}" y1="\${height-margin}" y2="\${height-margin}"/>
-        \${goal}\${marks}
+    const goal = kind === "usage" ? `<line class="target-line" x1="0" x2="${width}"
+      y1="${scale(this._config.goal)}" y2="${scale(this._config.goal)}"/>` : "";
+    return `<section class="plot">
+      <div class="plot-title"><b>${escape(title)}</b>
+        <span>${kind === "usage" ? escape(this._config.goal + "h goal") : "lower is generally better"}</span></div>
+      <svg class="plot-svg" viewBox="0 0 ${width} ${height}" preserveAspectRatio="none"
+        role="img" aria-label="${escape(title + " for " + nights.length + " nights")}">
+        <line class="axis" x1="0" x2="${width}" y1="${height-margin}" y2="${height-margin}"/>
+        ${goal}${marks}
       </svg>
-      <div class="date-axis"><span>\${escape(nights[0].night.slice(5))}</span>
-        <span>\${escape(nights[nights.length-1].night.slice(5))}</span></div>
-    </section>\`;
+      <div class="date-axis"><span>${escape(nights[0].night.slice(5))}</span>
+        <span>${escape(nights[nights.length-1].night.slice(5))}</span></div>
+    </section>`;
   }
 
   _eventChart(nights) {
@@ -383,24 +383,24 @@ class AirsupplyCard extends HTMLElement {
         if (!count) continue;
         const part = (count / max) * available;
         top -= part;
-        shapes += \`<rect class="event-segment \${cls}" x="\${(i+.5)*step-bw/2}"
-          y="\${top}" width="\${bw}" height="\${part}">
-          <title>\${escape(n.night + ": " + count + " " + key)}</title></rect>\`;
+        shapes += `<rect class="event-segment ${cls}" x="${(i+.5)*step-bw/2}"
+          y="${top}" width="${bw}" height="${part}">
+          <title>${escape(n.night + ": " + count + " " + key)}</title></rect>`;
       }
       return shapes;
     }).join("");
-    return \`<section class="plot"><div class="plot-title"><b>Respiratory events</b>
+    return `<section class="plot"><div class="plot-title"><b>Respiratory events</b>
       <span>counts per therapy night</span></div>
       <div class="legend"><span class="oa">Obstructive</span><span class="ca">Central</span>
         <span class="hyp">Hypopnoea</span></div>
-      <svg class="plot-svg event-svg" viewBox="0 0 \${width} \${height}"
+      <svg class="plot-svg event-svg" viewBox="0 0 ${width} ${height}"
         preserveAspectRatio="none" role="img" aria-label="Nightly respiratory event counts">
-        <line class="axis" x1="0" x2="\${width}" y1="\${height-bottom}" y2="\${height-bottom}"/>
-        \${bars}
+        <line class="axis" x1="0" x2="${width}" y1="${height-bottom}" y2="${height-bottom}"/>
+        ${bars}
       </svg>
-      <div class="date-axis"><span>\${escape(nights[0].night.slice(5))}</span>
-        <span>\${escape(nights[nights.length-1].night.slice(5))}</span></div>
-    </section>\`;
+      <div class="date-axis"><span>${escape(nights[0].night.slice(5))}</span>
+        <span>${escape(nights[nights.length-1].night.slice(5))}</span></div>
+    </section>`;
   }
 
   _foot() {
