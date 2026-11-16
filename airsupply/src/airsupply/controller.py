@@ -47,6 +47,14 @@ RADIO_SETTLE = 2.0
 PAIR_ATTEMPTS = 3
 PAIR_RETRY_PAUSE = 4.0
 
+# A paired device may not answer a Classic Bluetooth page immediately after
+# leaving the phone app or a previous session. Reconnect using a bounded
+# discovery / settle / retry sequence rather than waiting 15 minutes.
+# A genuine second client can still prevent a connection: never steal it.
+RECONNECT_ATTEMPTS = max(1, min(5, int(os.environ.get("AIRSUPPLY_RECONNECT_ATTEMPTS") or 3)))
+RECONNECT_SCAN_SECONDS = max(2, min(20, int(os.environ.get("AIRSUPPLY_RECONNECT_SCAN_SECONDS") or 8)))
+RECONNECT_RETRY_PAUSE = max(2.0, min(60.0, float(os.environ.get("AIRSUPPLY_RECONNECT_RETRY_PAUSE") or 8)))
+
 PAGE_TIMEOUT_ADVICE = "No answer. Put the machine in pairing mode and try again."
 
 
@@ -556,7 +564,41 @@ class Controller:
             return held
         if held is not None:
             await self._release(address)
+        if pin is None:
+            return await self._reconnect(address)
         return await self._connect(address, pin)
+
+    async def _reconnect(self, address):
+        """Try the existing application key without unpairing or stealing SPP.
+
+        A transient page/profile error triggers a short Classic inquiry. This
+        refreshes BlueZ's remote clock offset and page-scan information before
+        another attempt. Failed attempts never erase the stored pairing key.
+        """
+        for attempt in range(1, RECONNECT_ATTEMPTS + 1):
+            try:
+                held = await self._connect(address)
+                if attempt > 1:
+                    log.info("Reconnected to %s on attempt %d/%d.",
+                             address, attempt, RECONNECT_ATTEMPTS)
+                return held
+            except spp.NotReachable as err:
+                if not err.retryable or attempt == RECONNECT_ATTEMPTS:
+                    raise
+                log.warning("Bluetooth reconnect %d/%d: %s.",
+                            attempt, RECONNECT_ATTEMPTS, err)
+                # A manually started scan owns its own inquiry: don't start a
+                # competing scan or touch the Bluetooth bond.
+                if not self.scanning and self.adapter:
+                    try:
+                        self.scan(RECONNECT_SCAN_SECONDS)
+                        await self._scan_finished()
+                        await self.refresh(force=True)
+                    except Exception as scan_err:  # noqa: BLE001
+                        log.info("Bluetooth discovery refresh skipped: %s",
+                                 type(scan_err).__name__)
+                await asyncio.sleep(RECONNECT_RETRY_PAUSE)
+        raise RuntimeError("Reconnect attempts exhausted")
 
     async def _connect(self, address, pin=None):
         dev = next((d for d in self.devices if d["address"] == address), None)
