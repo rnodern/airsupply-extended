@@ -213,15 +213,18 @@ class Session:
             if collector is not None and name == "LoggedData" and isinstance(body, dict):
                 params = body.get("params")
                 if isinstance(params, dict):
+                    relevant = False
                     for entry in params.get("data", []):
                         if not isinstance(entry, dict):
                             continue
                         signal = entry.get("dataId")
                         if signal not in collector["signals"]:
                             continue
-                        collector["messages"].append(body)
+                        relevant = True
                         if entry.get("complete") is True:
                             collector["complete"].add(signal)
+                    if relevant:
+                        collector["messages"].append(body)
                     if (collector["signals"] <= collector["complete"]
                             and not collector["done"].done()):
                         collector["done"].set_result(None)
