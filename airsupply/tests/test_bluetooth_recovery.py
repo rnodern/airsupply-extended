@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from airsupply.controller import Controller
-from airsupply.bluez.spp import NotReachable, SerialProfile, transient
+from airsupply.bluez.spp import NotReachable, SerialProfile, transient, profile_options
 
 
 class BluezClassifications(unittest.TestCase):
@@ -20,6 +20,19 @@ class BluezClassifications(unittest.TestCase):
             "br-connection-key-missing",
         ):
             self.assertFalse(transient(RuntimeError(message)), message)
+
+
+class ProfileRoleTests(unittest.TestCase):
+    def test_client_only_is_the_safe_default(self):
+        opts = profile_options()
+        self.assertEqual("client", opts["Role"].value)
+        self.assertFalse(opts["AutoConnect"].value)
+
+    def test_dual_role_does_not_force_client_only(self):
+        opts = profile_options(dual_role=True)
+        self.assertNotIn("Role", opts)
+        self.assertFalse(opts["AutoConnect"].value)
+        self.assertTrue(opts["RequireAuthentication"].value)
 
 
 class PendingConnections(unittest.IsolatedAsyncioTestCase):
