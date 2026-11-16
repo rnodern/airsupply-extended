@@ -44,17 +44,32 @@ class SerialProfile(ServiceInterface):
     def expect(self, device_path):
         """Arm for a connection from one machine, and return its future."""
         pending = self._waiting.get(device_path)
-        if pending is not None and not pending.done():
-            pending.cancel()
+        if pending is not None:
+            self.cancel_expectation(device_path, pending)
         future = asyncio.get_running_loop().create_future()
         self._waiting[device_path] = future
         return future
+
+    def cancel_expectation(self, device_path, pending):
+        """Clean up a failed/aborted attempt, including an early delivered fd."""
+        if self._waiting.get(device_path) is pending:
+            self._waiting.pop(device_path, None)
+        if pending.done() and not pending.cancelled():
+            try:
+                _, fd, _ = pending.result()
+            except Exception:
+                return
+            close(fd)
+        elif not pending.done():
+            pending.cancel()
 
     def on_hangup(self, device_path, callback):
         self._hangup[device_path] = callback
 
     def forget(self, device_path):
-        self._waiting.pop(device_path, None)
+        pending = self._waiting.get(device_path)
+        if pending is not None:
+            self.cancel_expectation(device_path, pending)
         self._hangup.pop(device_path, None)
 
     @method()
@@ -108,13 +123,23 @@ async def register(bus):
 
 
 class NotReachable(Exception):
-    """The serial channel did not open, and we know roughly why.
+    """A failed SPP connection; retryable says whether another attempt is safe."""
 
-    BlueZ says things like `br-connection-timeout`, which is accurate and
-    tells somebody looking at their own bedroom nothing. The reason is known
-    at the point it happens and thrown away everywhere else, so it is turned
-    into a sentence here instead.
-    """
+    def __init__(self, message, *, retryable=False, reason=None):
+        super().__init__(message)
+        self.retryable = retryable
+        self.reason = reason
+
+
+def transient(err):
+    """A transport-level failure worth retrying without touching the bond."""
+    message = str(getattr(err, "text", "") or err).lower().replace("-", " ")
+    if "profile unavailable" in message or "not paired" in message:
+        return False
+    return any(term in message for term in (
+        "timeout", "already connected", "in progress",
+        "refused", "not ready", "temporarily unavailable",
+    ))
 
 
 def explain(err):
@@ -128,7 +153,7 @@ def explain(err):
             "No serial port on the machine."
         )
     if "already connected" in text:
-        return "Machine in use elsewhere."
+        return "Bluetooth connected elsewhere or stale."
     if "in progress" in text:
         return "Already connecting."
     if "refused" in text or "not available" in text:
@@ -137,37 +162,49 @@ def explain(err):
 
 
 async def connect(bus, device_path, profile, timeout=30.0):
-    """Ask BlueZ to bring up the serial profile, and wait for the fd.
+    """Connect the paired SPP profile via BlueZ, returning our owned fd.
 
-    Returns the file descriptor; the caller owns it. Raises NotReachable with
-    something worth reading when it does not open.
+    Both the D-Bus ConnectProfile call and its NewConnection callback are
+    bounded. If either fails or is cancelled, discard the registered
+    expectation and close any fd that arrived before the error.
     """
     introspection = await bus.introspect(c.BLUEZ, device_path)
     obj = bus.get_proxy_object(c.BLUEZ, device_path, introspection)
     device = obj.get_interface(c.DEVICE)
 
     if not await device.get_paired():
-        raise NotReachable(
-            "Not paired."
-        )
+        raise NotReachable("Not paired.")
 
     arrived = profile.expect(device_path)
     log.debug("Opening the serial channel to %s", device_path)
+    succeeded = False
     try:
-        await device.call_connect_profile(c.SPP_UUID)
-    except Exception as err:  # noqa: BLE001 -- BlueZ errors are opaque strings
-        log.debug("ConnectProfile failed: %s", err)
-        raise NotReachable(explain(err)) from err
+        try:
+            await asyncio.wait_for(device.call_connect_profile(c.SPP_UUID), timeout)
+        except asyncio.TimeoutError as err:
+            raise NotReachable(
+                "Timed out opening the Bluetooth profile.", retryable=True,
+                reason="page-timeout",
+            ) from err
+        except Exception as err:  # noqa: BLE001 -- BlueZ errors vary by version
+            log.debug("ConnectProfile failed: %s", err)
+            raise NotReachable(
+                explain(err), retryable=transient(err), reason="bluez",
+            ) from err
 
-    try:
-        _, fd, _ = await asyncio.wait_for(arrived, timeout)
-    except asyncio.TimeoutError as err:
-        raise NotReachable(
-            "Connected, but the channel never opened."
-        ) from err
+        try:
+            _, fd, _ = await asyncio.wait_for(arrived, timeout)
+        except asyncio.TimeoutError as err:
+            raise NotReachable(
+                "Connected, but the serial channel never opened.",
+                retryable=True, reason="fd-timeout",
+            ) from err
 
-    return fd
-
+        succeeded = True
+        return fd
+    finally:
+        if not succeeded:
+            profile.cancel_expectation(device_path, arrived)
 
 def close(fd):
     if fd is not None:
