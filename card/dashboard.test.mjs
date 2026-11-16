@@ -83,4 +83,4 @@ invalidFallback._config.view="usage";
 const currentNight = new Date(2026,10,16,12);
 const huge = invalidFallback._fold([{start:new Date(2026,10,16,1).getTime(),change:29.183}], currentNight);
 check("29-hour usage is suppressed rather than presented",
-  huge[huge.length-1].hours === null);
+  huge.find(n => n.at === invalidFallback._nightStart(new Date(2026,10,16,1)))?.hours === null);
