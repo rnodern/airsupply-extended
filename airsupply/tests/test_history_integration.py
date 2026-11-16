@@ -92,5 +92,27 @@ class EntityTests(unittest.TestCase):
         )
 
 
+class DashboardDiscoveryTests(unittest.TestCase):
+    def test_history_sensor_uses_nightly_mqtt_attributes(self):
+        address = "AA:BB"
+        doc = entities.state({}, "2026-11-16T00:00:00+00:00", history_count=14)
+        self.assertEqual(14, doc["history_nights"])
+        configurations = dict(entities.discovery(address, "AirMini", None, None,
+                                                 "dev", set(doc)))
+        history = configurations[
+            "homeassistant/sensor/airsupply_aa_bb/history_nights/config"
+        ]
+        self.assertEqual("airsupply/aa_bb/nights", history["json_attributes_topic"])
+        self.assertEqual("airsupply/aa_bb/state", history["state_topic"])
+        self.assertEqual(
+            "{{ value_json.history_nights }}", history["value_template"]
+        )
+
+    def test_history_does_not_affect_regular_sensor_when_absent(self):
+        doc = entities.state({}, "2026-11-16T00:00:00+00:00")
+        self.assertNotIn("history_nights", doc)
+        self.assertIn("last_read", doc)
+
+
 if __name__ == "__main__":
     unittest.main()
