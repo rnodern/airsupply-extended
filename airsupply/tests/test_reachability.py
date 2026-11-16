@@ -22,7 +22,7 @@ class Explain(unittest.TestCase):
             self.assertEqual("No answer. Machine off or out of range.", said, text)
 
     def test_something_else_holding_the_machine_says_so(self):
-        self.assertEqual("Machine in use elsewhere.", explain(Error("br-connection-already-connected")))
+        self.assertEqual("Bluetooth connected elsewhere or stale.", explain(Error("br-connection-already-connected")))
 
     def test_a_machine_with_no_serial_port_says_so(self):
         self.assertEqual("No serial port on the machine.",
