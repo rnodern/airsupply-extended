@@ -53,6 +53,66 @@ class PendingConnections(unittest.IsolatedAsyncioTestCase):
         profile.cancel_expectation("/a", new)
 
 
+class InboundProfileTests(unittest.IsolatedAsyncioTestCase):
+    async def test_accepted_incoming_is_retained_and_taken_once(self):
+        profile = SerialProfile(on_incoming=lambda path: path == "/allowed")
+        profile.dual_role = True
+        with patch("airsupply.bluez.spp.close") as close:
+            profile.NewConnection("/allowed", 91, {})
+            self.assertEqual(91, profile.take_incoming("/allowed")[1])
+            self.assertIsNone(profile.take_incoming("/allowed"))
+            close.assert_not_called()
+
+    async def test_unknown_and_unpaired_paths_are_closed(self):
+        profile = SerialProfile(on_incoming=lambda path: False)
+        profile.dual_role = True
+        with patch("airsupply.bluez.spp.close") as close:
+            profile.NewConnection("/unknown", 92, {})
+            close.assert_called_once_with(92)
+            self.assertEqual((), profile.pending_incoming())
+
+    async def test_duplicate_incoming_does_not_replace_original_fd(self):
+        profile = SerialProfile(on_incoming=lambda _: True)
+        profile.dual_role = True
+        with patch("airsupply.bluez.spp.close") as close:
+            profile.NewConnection("/allowed", 93, {})
+            profile.NewConnection("/allowed", 94, {})
+            self.assertEqual(93, profile.take_incoming("/allowed")[1])
+            close.assert_called_once_with(94)
+
+    async def test_pending_outbound_wins_race_without_leak(self):
+        profile = SerialProfile(on_incoming=lambda _: True)
+        profile.dual_role = True
+        future = profile.expect("/allowed")
+        profile.NewConnection("/allowed", 95, {})
+        self.assertEqual(95, (await future)[1])
+        self.assertEqual((), profile.pending_incoming())
+
+    async def test_unclaimed_incoming_closed_on_shutdown(self):
+        profile = SerialProfile(on_incoming=lambda _: True)
+        profile.dual_role = True
+        with patch("airsupply.bluez.spp.close") as close:
+            profile.NewConnection("/allowed", 96, {})
+            profile.close()
+            close.assert_called_once_with(96)
+
+    async def test_controller_accepts_only_stored_paired_not_released(self):
+        ctl = object.__new__(Controller)
+        ctl.sessions = {}
+        ctl.released = set()
+        ctl._schedule_incoming = MagicMock()
+        path = "/org/bluez/hci0/dev_58_26_3A_E8_C9_7D"
+        entry = {"58:26:3A:E8:C9:7D": {"paired": True}}
+        with patch("airsupply.controller.store.machines", return_value=entry), \
+             patch("airsupply.controller.store.master_pair_key", return_value="fake-key"):
+            self.assertTrue(ctl._accept_incoming(path))
+            await asyncio.sleep(0)
+            ctl._schedule_incoming.assert_called_once_with("58:26:3A:E8:C9:7D")
+            ctl.released.add("58:26:3A:E8:C9:7D")
+            self.assertFalse(ctl._accept_incoming(path))
+            self.assertFalse(ctl._accept_incoming("/org/bluez/hci0/dev_UNKNOWN"))
+
+
 class RecoveryTests(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         self.ctl = object.__new__(Controller)
