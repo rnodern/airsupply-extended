@@ -175,7 +175,7 @@ class Controller:
             log.error("Could not register a pairing agent: %s", err)
             log.error("The Bluetooth bond step will not work from this page.")
 
-        self.profile = await spp.register(self.bus)
+        self.profile = await spp.register(self.bus, on_incoming=self._accept_incoming)
         await self.refresh(force=True)
 
         self.publisher.start()
@@ -209,6 +209,8 @@ class Controller:
                 log.warning("Could not fully release %s on shutdown: %s.",
                             address, type(err).__name__)
 
+        if self.profile is not None:
+            self.profile.close()
         await self.publisher.stop()
         log.info("Stopped AirSupply; released owned Bluetooth sessions.")
 
@@ -224,6 +226,46 @@ class Controller:
         except hass.Unavailable as err:
             self.people_problem = str(err)
             log.warning("Could not ask Home Assistant who lives here: %s", err)
+
+    def _accept_incoming(self, device_path):
+        """Vet an inbound SPP connection and request a normal read.
+
+        BlueZ authenticates the link, but a trusted device alone cannot
+        authorise AirSupply to access stored therapy data. The peer must be
+        a machine registered in our local store and have a saved application
+        pairing key. Deliberately released devices never auto-reconnect.
+        """
+        match = re.search(r"/dev_([0-9A-Fa-f_]{17})$", device_path)
+        if match is None:
+            return False
+        address = match.group(1).replace("_", ":").upper()
+        if address in self.released or address in self.sessions:
+            return False
+        saved = store.machines().get(address)
+        if not saved or not saved.get("paired"):
+            return False
+        if not store.master_pair_key(address):
+            return False
+
+        # The Profile1 handler will cache the fd after this returns; defer
+        # consumption until the callback has completed.
+        loop = asyncio.get_running_loop()
+        loop.call_soon(self._schedule_incoming, address)
+        return True
+
+    def _schedule_incoming(self, address):
+        if address in self.released or address in self.sessions:
+            return
+        if self.busy:
+            # The in-flight outbound read can consume the incoming fd from
+            # its existing Profile1 expectation; otherwise the schedule
+            # will pick it up after the current operation.
+            log.info("Incoming AirMini connection queued during %s.", self.busy)
+            return
+        try:
+            self._spawn("read", lambda: self._read(address))
+        except Busy:
+            pass
 
     def _paired(self):
         """Machines there is a key for, so they can be read without anybody."""
