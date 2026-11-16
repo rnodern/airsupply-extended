@@ -39,7 +39,18 @@ jobs:
           PYTHONPATH: src
 
   image:
-    runs-on: ubuntu-latest
+    name: image (${{ matrix.arch }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-latest
+            base: ghcr.io/home-assistant/amd64-base:3.21
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+            base: ghcr.io/home-assistant/aarch64-base:3.21
     steps:
       - uses: actions/checkout@v6
 
@@ -50,6 +61,6 @@ jobs:
           context: airsupply
           push: false
           build-args: |
-            BUILD_FROM=ghcr.io/home-assistant/amd64-base:3.21
+            BUILD_FROM=${{ matrix.base }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
