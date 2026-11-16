@@ -182,6 +182,36 @@ class Controller:
         await self.refresh_people()
         self._schedule_task = asyncio.create_task(self._schedule())
 
+    async def stop(self):
+        """Gracefully release only sessions that this process actually owns.
+
+        Docker sends SIGTERM when an image is replaced. Without an explicit
+        shutdown path, the process exits before telling BlueZ to disconnect
+        its held SPP profile. The next process may then see an 'already
+        connected' link without owning a usable RFCOMM descriptor.
+        """
+        pending = [
+            task for task in (
+                self._schedule_task, self._scan_task, self._task,
+            ) if task is not None and not task.done()
+        ]
+        if self._scan_stop is not None:
+            self._scan_stop.set()
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+        for address in list(self.sessions):
+            try:
+                await asyncio.wait_for(self._release(address), timeout=3)
+            except Exception as err:  # noqa: BLE001 -- shutdown is best effort
+                log.warning("Could not fully release %s on shutdown: %s.",
+                            address, type(err).__name__)
+
+        await self.publisher.stop()
+        log.info("Stopped AirSupply; released owned Bluetooth sessions.")
+
     async def refresh_people(self):
         """Who Home Assistant knows about, so a machine can belong to one."""
         if not hass.configured():
