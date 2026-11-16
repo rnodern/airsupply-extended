@@ -133,6 +133,11 @@ class Controller:
         self.released = set()
 
         self.publisher = mqtt.Publisher(version)
+        # Opt in only after the device clock offset has been measured.
+        self.history = None
+        if os.environ.get("AIRSUPPLY_HISTORY_ENABLED", "0") == "1":
+            from .history_sync import HistoryManager
+            self.history = HistoryManager()
         self.people = []
         self.people_problem = None
         self.log = collections.deque(maxlen=LOG_LINES)
@@ -383,9 +388,10 @@ class Controller:
         record = store.machines().get(address) or {}
         person = next((p for p in self.people if p.id == record.get("person_id")), None)
         reading = self.readings.get(address) or {}
+        nights = self.history.recent(address) if self.history is not None else None
         self.publisher.publish(address, record.get("name") or "", person,
                                reading.get("results"), reading.get("at_iso"),
-                               address in self.sessions)
+                               address in self.sessions, nights=nights)
 
     def _republish(self, address):
 
@@ -528,6 +534,8 @@ class Controller:
             self.released.discard(gone)
             self.publisher.forget(gone)
             store.forget(gone)
+            if self.history is not None:
+                self.history.forget(gone)
             self.readings.pop(gone, None)
         self.selected = store.selected()
         self.session_state = None
@@ -648,6 +656,14 @@ class Controller:
                 results[title] = {"ok": False, "error": str(err)}
                 log.error("%s failed: %s", title, err)
                 failures += 1
+        if self.history is not None and self.history.is_due(address):
+            try:
+                received, nights = await self.history.sync(session, address)
+                log.info("Historical sync completed: %d notifications, %d nights.",
+                         received, nights)
+            except Exception as err:  # noqa: BLE001
+                # A failed historical sync must not suppress standard sensors.
+                log.warning("Historical sync deferred: %s", type(err).__name__)
         self.readings[address] = {
             "results": results,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
