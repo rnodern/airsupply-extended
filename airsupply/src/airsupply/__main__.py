@@ -82,8 +82,7 @@ async def run():
         if runner is not None:
             await runner.cleanup()
         await controller.stop()
-        if bus.connected:
-            bus.disconnect()
+        bus.disconnect()
 
 
 def main():
