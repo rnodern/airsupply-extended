@@ -63,3 +63,11 @@ are cross-checked. Official ResMed score is not reconstructed.
 
 No patient readings, raw history, pairing key or broker credentials belong in
 GitHub commits, issues, PR descriptions or CI output.
+
+## CI verification
+
+GitHub Actions runs the existing `CI` workflow on pull-request updates. The
+`tests` job runs the Python unit suite, while the `image` job builds the
+AirSupply container (including its bundled libairmini).
+Do not merge this draft PR or deploy to the AirMini until both jobs pass and
+hardware behaviour has been checked independently.
