@@ -1,11 +1,11 @@
 name: Staging ARM64 image
 
-# Publish only from our development branch. Do not update the upstream image
-# or release an unvalidated CPAP integration.
+# Development branches publish separate ARM64 tags for hardware trials.
 on:
   push:
     branches:
       - feature/airmini-history
+      - feature/multi-machine
     paths:
       - "airsupply/**"
       - ".github/workflows/staging-image.yml"
@@ -51,5 +51,5 @@ jobs:
           push: true
           build-args: |
             BUILD_FROM=ghcr.io/home-assistant/aarch64-base:3.21
-            BUILD_VERSION=dev
-          tags: ghcr.io/rnodern/airsupply-extended:staging-arm64
+            BUILD_VERSION=dev-${{ github.sha }}
+          tags: ghcr.io/rnodern/airsupply-extended:${{ github.ref_name == 'feature/multi-machine' && 'multi-machine-arm64' || 'staging-arm64' }}

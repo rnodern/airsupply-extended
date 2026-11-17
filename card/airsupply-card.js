@@ -309,8 +309,12 @@ class AirsupplyCard extends HTMLElement {
 
     const valid = nights.filter((n) => Number.isFinite(n.usage_hours) && n.usage_hours > 0);
     const latest = nights[nights.length - 1];
-    const hours = valid.reduce((total, n) => total + n.usage_hours, 0);
-    const events = valid.reduce((total, n) => total + (Number(n.ahi_events) || 0), 0);
+    const rates = valid.filter((n) =>
+      (Number.isInteger(n.ahi_events) && n.ahi_events >= 0) ||
+      (Number.isFinite(n.ahi) && n.ahi >= 0));
+    const hours = rates.reduce((total, n) => total + n.usage_hours, 0);
+    const events = rates.reduce((total, n) => total +
+      (Number.isInteger(n.ahi_events) && n.ahi_events >= 0 ? n.ahi_events : n.ahi * n.usage_hours), 0);
     const averageAHI = hours > 0 ? events / hours : null;
     const overGoal = valid.filter((n) => n.usage_hours >= this._config.goal).length;
 
@@ -324,7 +328,7 @@ class AirsupplyCard extends HTMLElement {
           <small>${escape(latest.night)}</small></div>
         <div class="stat"><span class="stat-label">Average AHI</span>
           <strong>${this._number(averageAHI)}</strong>
-          <small>weighted by usage · ${valid.length} nights</small></div>
+          <small>weighted by usage · ${rates.length} nights</small></div>
         <div class="stat"><span class="stat-label">Usage goal</span>
           <strong>${overGoal}<span class="stat-sub"> / ${valid.length}</span></strong>
           <small>nights ≥ ${escape(this._config.goal)} h</small></div>
@@ -348,9 +352,9 @@ class AirsupplyCard extends HTMLElement {
           <td>${this._count(n.rera)}</td>
         </tr>`).join("")}</tbody></table></div>
       </div>
-      <p class="fineprint">AHI is calculated from logged events and therapy time, not a
-      clinical assessment. OA = obstructive apnoea, CA = central apnoea,
-      H = hypopnoea. RERA is excluded from AHI. Leak and pressure
+      <p class="fineprint">AHI uses the machine's summary or logged events and therapy time.
+      OA = obstructive apnoea, CA = central apnoea,
+      H = hypopnoea. RERA is excluded from AHI. Unreported event counts appear as a dash. Leak and pressure
       are withheld pending unit validation.</p>
     </div>`;
   }
@@ -415,6 +419,11 @@ class AirsupplyCard extends HTMLElement {
     const max = Math.max(1, ...totals);
     const step = width / nights.length, bw = step * .6, available = height - bottom;
     const bars = nights.map((n, i) => {
+      if (categories.some(([key]) => !Number.isInteger(n[key]) || n[key] < 0)) {
+        return `<line class="missing-mark" x1="${(i+.5)*step}" x2="${(i+.5)*step}"
+          y1="${height-bottom-4}" y2="${height-bottom+1}">
+          <title>${escape(n.night + ": Event counts unavailable")}</title></line>`;
+      }
       let top = height - bottom;
       let shapes = "";
       for (const [key, cls] of categories) {
@@ -587,7 +596,7 @@ window.customCards = window.customCards || [];
 window.customCards.push({
   type: "airsupply-extended-card",
   name: "AirSupply Extended",
-  description: "AirMini therapy history: AHI, usage and respiratory events.",
+  description: "CPAP therapy history: AHI, usage and reported respiratory events.",
   preview: true,
   documentationURL: "https://github.com/rnodern/airsupply-extended",
 });

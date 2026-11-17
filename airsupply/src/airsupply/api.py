@@ -74,6 +74,8 @@ def stage(raw, chosen):
         return "no-adapter"
     if chosen is None:
         return "choose"
+    if not chosen["paired"] and chosen.get("driver") == "airsense11":
+        return "pin"
     if not chosen["paired"] and not chosen["bonded"]:
         return "pairing"
     if not chosen["paired"]:

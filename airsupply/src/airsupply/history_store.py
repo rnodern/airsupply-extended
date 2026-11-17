@@ -8,6 +8,7 @@ import datetime as dt
 import json
 import os
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
 
 DEFAULT_PATH = "/data/airsupply-history.sqlite3"
@@ -24,10 +25,15 @@ class HistoryStore:
             os.umask(old_umask)
         os.chmod(self.path, 0o600)
 
+    @contextmanager
     def _connect(self):
         db = sqlite3.connect(self.path, timeout=10)
-        db.execute("PRAGMA busy_timeout=10000")
-        return db
+        try:
+            db.execute("PRAGMA busy_timeout=10000")
+            with db:
+                yield db
+        finally:
+            db.close()
 
     def _initialise(self):
         with self._connect() as db:

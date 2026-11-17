@@ -46,6 +46,7 @@ type alias Person =
 type alias Machine =
     { address : String
     , name : String
+    , driver : String
     , signal : Maybe Int
     , classic : Bool
     , serial : Bool
@@ -402,9 +403,10 @@ personDecoder =
 
 machineDecoder : D.Decoder Machine
 machineDecoder =
-    D.map6 Machine
+    D.map7 Machine
         (D.field "address" D.string)
         (D.field "name" D.string)
+        (D.field "driver" D.string)
         (D.field "signal" (D.nullable D.int))
         (D.field "classic" D.bool)
         (D.field "serial" D.bool)
@@ -774,7 +776,15 @@ setup model state =
 
         NeedsPin ->
             [ div [ class "card" ]
-                [ p [ class "note" ] [ text "Type the PIN on the machine's screen. Needed once." ]
+                [ p [ class "note" ]
+                    [ text
+                        (if Maybe.map .driver state.machine == Just "airsense11" then
+                            "Open Bluetooth pairing on the AirSense and enter its screen code. Pairing replaces the myAir app's Bluetooth pairing. Cellular nightly reports continue in myAir."
+
+                         else
+                            "Type the PIN on the machine's screen. Needed once."
+                        )
+                    ]
                 , Html.form [ class "row-btns", onSubmit SendPin ]
                     [ input
                         [ value model.pin
@@ -1089,7 +1099,10 @@ device state machine =
                 [ Field "Bluetooth address" machine.address
                 , Field "Signal" (signalText machine.signal)
                 , Field "Bluetooth pairing"
-                    (if machine.bonded then
+                    (if machine.driver == "airsense11" then
+                        "application screen code"
+
+                     else if machine.bonded then
                         "paired"
 
                      else

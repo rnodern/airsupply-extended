@@ -239,21 +239,21 @@ BINARY_SENSORS = (
 COPIED = "|".join(s["key"] for s in SENSORS)
 
 
-def device(address, machine_name, person_name, firmware):
+def device(address, machine_name, person_name, firmware, model=MODEL):
     """The device every entity for this machine hangs off.
 
     Named for the person when there is one. Home Assistant has no way to say
     a device belongs to somebody -- a person owns device trackers and nothing
     else -- so the name and the attributes are where the association shows.
     """
-    name = machine_name or MODEL
+    name = machine_name or model
     if person_name:
         name = f"{name} ({person_name})"
     info = {
         "identifiers": [f"airsupply_{node(address)}"],
         "name": name,
         "manufacturer": MANUFACTURER,
-        "model": MODEL,
+        "model": model,
         "connections": [["mac", address.lower()]],
     }
     if firmware:
@@ -261,7 +261,7 @@ def device(address, machine_name, person_name, firmware):
     return info
 
 
-def discovery(address, machine_name, person_name, firmware, version, keys):
+def discovery(address, machine_name, person_name, firmware, version, keys, model=MODEL):
     """The discovery messages for one machine: (topic, payload) pairs.
 
     Only for the entities `keys` says this machine reports. A machine on
@@ -273,7 +273,7 @@ def discovery(address, machine_name, person_name, firmware, version, keys):
     machine mentions it: switch to CPAP and the set pressure turns up at the
     next read.
     """
-    info = device(address, machine_name, person_name, firmware)
+    info = device(address, machine_name, person_name, firmware, model)
     origin = {"name": "airsupply", "sw_version": version,
               "support_url": "https://github.com/ananthb/airsupply"}
     out = []
@@ -347,7 +347,7 @@ def _active_profile(settings):
     if not isinstance(settings, dict):
         return {}
     profiles = settings.get("TherapyProfiles")
-    active = settings.get("ActiveTherapyProfile")
+    active = settings.get("ActiveTherapyProfile") or _dig(settings, ("ActiveProfiles", "TherapyProfile"))
     if isinstance(profiles, dict) and active in profiles and isinstance(profiles[active], dict):
         return profiles[active]
     return {}
@@ -393,7 +393,7 @@ def state(results, read_at, connected=None, latest_night=None, history_count=Non
 
     status = settings.get("FGState")
     if isinstance(status, str):
-        out["in_therapy"] = "on" if status.lower() == "therapy" else "off"
+        out["in_therapy"] = "on" if status.lower() in ("therapy", "running") else "off"
     if connected is not None:
         out["connected"] = "on" if connected else "off"
     return out

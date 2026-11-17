@@ -22,6 +22,7 @@ from dbus_next import DBusError
 
 from . import entities, hass, mqtt, store
 from .bluez import adapter, agent, spp
+from .machine import AIRMINI, AIRSENSE11
 
 log = logging.getLogger("airsupply")
 
@@ -138,6 +139,7 @@ class Controller:
         # it is to give the machine to the phone app, and a schedule that took
         # it straight back would make the button a lie.
         self.sessions = {}
+        self.air11 = {}
         self.released = set()
 
         self.publisher = mqtt.Publisher(version)
@@ -202,6 +204,10 @@ class Controller:
             task.cancel()
         if pending:
             await asyncio.gather(*pending, return_exceptions=True)
+
+        for driver in list(self.air11.values()):
+            await driver.stop()
+        self.air11.clear()
 
         for address in list(self.sessions):
             try:
@@ -286,6 +292,9 @@ class Controller:
             for address in self._paired():
                 if self.busy or address in self.released:
                     continue
+                if store.driver(address) == AIRSENSE11:
+                    self._air11_driver(address).start()
+                    continue
                 try:
                     await self._spawn("read", lambda a=address: self._read(a))
                 except Busy:
@@ -322,7 +331,7 @@ class Controller:
             "selected": self.selected,
             "selected_device": sel,
             "bonded": bool(sel and sel["paired"]),
-            "has_key": bool(self.selected and store.master_pair_key(self.selected)),
+            "has_key": bool(self.selected and store.machines().get(self.selected, {}).get("paired")),
             "prompt": self._prompt.to_json() if self._prompt else None,
             "machines": self.machines(),
             "people": [person.to_json() for person in self.people],
@@ -352,15 +361,18 @@ class Controller:
             device = next((d for d in self.devices if d["address"] == address), None) or {}
             reading = self.readings.get(address)
             person = people.get(record["person_id"])
+            ble = self.air11.get(address)
+            driver = record.get("driver", AIRMINI)
             out.append({
                 "address": address,
                 "name": device.get("name") or record["name"] or "",
                 "signal": device.get("rssi"),
-                "classic": bool(device.get("classic", True)),
+                "classic": bool(device.get("classic", driver == AIRMINI)),
                 "serial": bool(device.get("spp")),
                 "bonded": bool(device.get("paired")),
-                "paired": record["paired"],
-                "connected": address in self.sessions,
+                "paired": bool(record["paired"] and not (ble and ble.auth_required)),
+                "connected": address in self.sessions or bool(ble and ble.connected),
+                "driver": driver,
                 "released": address in self.released,
                 "person": person.to_json() if person else None,
                 "person_id": record["person_id"],
@@ -449,7 +461,7 @@ class Controller:
         device = next((d for d in self.devices if d["address"] == address), None)
         if device is None and address not in store.machines():
             raise ValueError(f"Unknown machine: {address}.")
-        store.add(address, (device or {}).get("name", ""))
+        store.add(address, (device or {}).get("name", ""), driver=(device or {}).get("driver"))
         store.select(address)
         self.selected = address
         log.info("Looking at %s.", address)
@@ -470,9 +482,35 @@ class Controller:
         person = next((p for p in self.people if p.id == record.get("person_id")), None)
         reading = self.readings.get(address) or {}
         nights = self.history.recent(address) if self.history is not None else None
-        self.publisher.publish(address, record.get("name") or "", person,
-                               reading.get("results"), reading.get("at_iso"),
-                               address in self.sessions, nights=nights)
+        ble = self.air11.get(address)
+        self.publisher.publish(
+            address, record.get("name") or "", person,
+            reading.get("results"), reading.get("at_iso"),
+            address in self.sessions or bool(ble and ble.connected), nights=nights,
+            model=ble.model if ble else record.get("model", "AirMini"),
+        )
+
+    def _air11_driver(self, address):
+        driver = self.air11.get(address)
+        if driver is None:
+            from .airsense.driver import Driver
+            driver = Driver(
+                address, lambda: self._air11_update(address),
+                history=self.history, read_every=READ_EVERY,
+            )
+            self.air11[address] = driver
+        return driver
+
+    def _air11_update(self, address):
+        driver = self.air11.get(address)
+        if driver is None:
+            return
+        self.readings[address] = {
+            "results": driver.results, "at": driver.at, "at_iso": driver.at_iso,
+        }
+        if driver.auth_required:
+            self.error = driver.problem
+        self._publish(address)
 
     def _republish(self, address):
 
@@ -570,6 +608,11 @@ class Controller:
 
     async def _first_pair(self, pin):
         address = self.selected
+        if address and store.driver(address) == AIRSENSE11:
+            await self._release(address)
+            self.released.discard(address)
+            await self._air11_driver(address).pair(pin)
+            return
         held = await self._held(address, pin=pin)
         async with held.lock:
             await self._reads(held.session, address)
@@ -590,6 +633,16 @@ class Controller:
     async def _read(self, address):
         if not address:
             raise RuntimeError("No machine selected.")
+        if store.driver(address) == AIRSENSE11:
+            if not store.credentials(address):
+                raise RuntimeError("Pair the AirSense using its screen code first.")
+            self.released.discard(address)
+            driver = self._air11_driver(address)
+            if driver.auth_required:
+                raise RuntimeError(driver.problem)
+            driver.start()
+            driver.request_read()
+            return
         held = await self._held(address)
         try:
             async with held.lock:
@@ -603,7 +656,7 @@ class Controller:
 
     async def _forget(self):
         dev = self._selected_device()
-        if dev is not None and self.adapter:
+        if dev is not None and self.adapter and store.driver(self.selected) == AIRMINI:
             try:
                 await adapter.remove(self.bus, self.adapter["path"], dev["path"])
                 log.info("Unpaired %s.", dev["address"])
@@ -725,14 +778,20 @@ class Controller:
         if held is None:
             return
         log.info("Disconnected from %s.", address)
+        self._republish(address)
         asyncio.create_task(self._tidy(held))
 
     async def _release(self, address):
         """Let go of a machine deliberately."""
+        ble = self.air11.get(address)
+        if ble is not None:
+            await ble.stop()
+            self.air11.pop(address, None)
         held = self.sessions.pop(address, None)
         if held is None:
             return
         await self._tidy(held)
+        self._republish(address)
         log.info("Released %s.", address)
 
     async def _tidy(self, held):

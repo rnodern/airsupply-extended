@@ -19,6 +19,8 @@ import logging
 import os
 import threading
 
+from .machine import AIRMINI, AIRSENSE11, MODELS
+
 log = logging.getLogger("airsupply.store")
 
 PATH = os.environ.get("AIRSUPPLY_STATE", "/data/airsupply.json")
@@ -92,9 +94,12 @@ def upgrade():
 
 def save(data):
     tmp = f"{PATH}.tmp"
-    with open(tmp, "w", encoding="utf-8") as handle:
+    descriptor = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+        os.fchmod(handle.fileno(), 0o600)
         json.dump(data, handle, indent=2, sort_keys=True)
-    os.chmod(tmp, 0o600)
+        handle.flush()
+        os.fsync(handle.fileno())
     os.replace(tmp, PATH)
 
 
@@ -118,7 +123,12 @@ def _slot(data, address):
 def machines():
     """Every machine, address to record. The record never carries the key."""
     return {
-        address: {"name": m.get("name") or "", "person_id": m.get("person_id"), "paired": bool(m.get("key"))}
+        address: {
+            "name": m.get("name") or "", "person_id": m.get("person_id"),
+            "driver": m.get("driver", AIRMINI),
+            "model": m.get("model") or MODELS.get(m.get("driver", AIRMINI), "CPAP"),
+            "paired": bool(m.get("credentials") if m.get("driver") == AIRSENSE11 else m.get("key")),
+        }
         for address, m in load()["machines"].items()
     }
 
@@ -139,13 +149,28 @@ def person_id(address):
     return (load()["machines"].get(address.upper()) or {}).get("person_id")
 
 
+def driver(address):
+    return (load()["machines"].get(address.upper()) or {}).get("driver", AIRMINI)
+
+
+def credentials(address):
+    """Air11 credentials stay in the same private file as AirMini keys."""
+    return (load()["machines"].get(address.upper()) or {}).get("credentials")
+
+
 # --- writing ---------------------------------------------------------------
 
 
-def add(address, name=""):
+def add(address, name="", driver=None):
     """Know about a machine, whether or not it has ever been paired with."""
     def change(data):
         slot = _slot(data, address)
+        if driver is not None:
+            if driver not in MODELS:
+                raise ValueError("Unsupported machine driver.")
+            if driver != slot.get("driver", AIRMINI) and (slot.get("key") or slot.get("credentials")):
+                raise ValueError("The paired machine already uses a different driver.")
+            slot["driver"] = driver
         if name:
             slot["name"] = name
     _edit(change)
@@ -168,6 +193,21 @@ def remember_master_pair_key(address, key):
         _slot(data, address)["key"] = key
     _edit(change)
     log.info("Stored the pairing key for %s; the PIN is not needed again.", address)
+
+
+def remember_credentials(address, credentials):
+    """Store both Air11 authentication fields together after a successful pairing."""
+    client_id = credentials.get("client_id")
+    key = credentials.get("master_pair_key")
+    if not isinstance(client_id, str) or not client_id or not isinstance(key, str) or len(key) != 64:
+        raise ValueError("Incomplete AirSense pairing credentials.")
+    bytes.fromhex(key)
+    def change(data):
+        slot = _slot(data, address)
+        slot["driver"] = AIRSENSE11
+        slot["credentials"] = {"client_id": client_id, "master_pair_key": key}
+    _edit(change)
+    log.info("Stored AirSense pairing credentials for %s.", address)
 
 
 def assign(address, person):
