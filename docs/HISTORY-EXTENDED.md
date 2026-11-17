@@ -13,7 +13,11 @@ the main branch and is not yet deployed on the Raspberry Pi.
 - `Session.collect_logged_data()`: collects all four requested signals on
   the **existing held RFCOMM session**. It requires completion markers for
   each signal and fails on timeout/connection loss.
-- `history_sync.py`: optional 16-day read-only pull, default every 12 hours.
+- `history_sync.py`: optional 16-day read-only pull, with a 12-hour fallback
+  interval by default. AirSupply also pulls history on its first normal read
+  that sees standby after therapy, or a standby reading with therapy use newer
+  than the last successful history pull. A failed download is retried on the
+  next eligible read.
 - `history_store.py`: private SQLite storage of **derived summaries only**,
   with per-device records and upserts; no raw therapy event logs, PINs or keys.
 - Home Assistant MQTT Discovery: sensors for the latest night/date, usage,

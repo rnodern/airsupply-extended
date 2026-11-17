@@ -20,7 +20,7 @@ import time
 
 from dbus_next import DBusError
 
-from . import hass, mqtt, store
+from . import entities, hass, mqtt, store
 from .bluez import adapter, agent, spp
 
 log = logging.getLogger("airsupply")
@@ -143,6 +143,7 @@ class Controller:
         self.publisher = mqtt.Publisher(version)
         # Opt in only after the device clock offset has been measured.
         self.history = None
+        self._therapy_history_pending = set()
         if os.environ.get("AIRSUPPLY_HISTORY_ENABLED", "0") == "1":
             from .history_sync import HistoryManager
             self.history = HistoryManager()
@@ -616,6 +617,7 @@ class Controller:
             store.forget(gone)
             if self.history is not None:
                 self.history.forget(gone)
+            self._therapy_history_pending.discard(gone)
             self.readings.pop(gone, None)
         self.selected = store.selected()
         self.session_state = None
@@ -770,14 +772,8 @@ class Controller:
                 results[title] = {"ok": False, "error": str(err)}
                 log.error("%s failed: %s", title, err)
                 failures += 1
-        if self.history is not None and self.history.is_due(address):
-            try:
-                received, nights = await self.history.sync(session, address)
-                log.info("Historical sync completed: %d notifications, %d nights.",
-                         received, nights)
-            except Exception as err:  # noqa: BLE001
-                # A failed historical sync must not suppress standard sensors.
-                log.warning("Historical sync deferred: %s", type(err).__name__)
+        if self.history is not None:
+            await self._sync_history(session, address, results)
         self.readings[address] = {
             "results": results,
             "at": time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -790,6 +786,31 @@ class Controller:
             log.warning("%d of 4 reads failed.", failures)
         else:
             log.info("All four reads returned.")
+
+    async def _sync_history(self, session, address, results):
+        """Use the existing session lock for standby and scheduled downloads."""
+        snapshot = entities.state(results, None)
+        status = snapshot.get("status", "").casefold()
+        if status == "therapy":
+            self._therapy_history_pending.add(address)
+        standby = status == "standby"
+        therapy_ended = standby and address in self._therapy_history_pending
+        last_therapy_use = snapshot.get("last_used") if standby else None
+        if not therapy_ended and not self.history.is_due(address, last_therapy_use=last_therapy_use):
+            return
+
+        if therapy_ended:
+            log.info("AirMini entered standby after therapy; syncing history.")
+        try:
+            received, nights = await self.history.sync(session, address)
+        except Exception as err:  # noqa: BLE001
+            # Keep a failed standby download pending for the next read.
+            log.warning("Historical sync deferred: %s", type(err).__name__)
+        else:
+            if therapy_ended:
+                self._therapy_history_pending.discard(address)
+            log.info("Historical sync completed: %d notifications, %d nights.",
+                     received, nights)
 
 
 def master_pair_key(result):
