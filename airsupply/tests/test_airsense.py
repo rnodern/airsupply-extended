@@ -406,6 +406,34 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(MINI_ADDRESS, store.machines())
         self.controller.publisher.forget.assert_called_once_with(ADDRESS)
 
+    async def test_startup_publishes_disconnected_state_and_starts_ble_independently(self):
+        store.add(MINI_ADDRESS)
+        store.remember_master_pair_key(MINI_ADDRESS, "ab" * 32)
+        store.add(ADDRESS, driver=AIRSENSE11)
+        store.remember_credentials(ADDRESS, Credentials("SYNTHETIC", b"x" * 32).as_dict())
+        driver = Mock()
+        self.controller._air11_driver = Mock(return_value=driver)
+        self.controller._schedule = AsyncMock()
+        self.controller.refresh_people = AsyncMock()
+        messages = {}
+        self.controller.publisher.start = Mock()
+        self.controller.publisher._send = messages.__setitem__
+        import logging
+        handlers = set(logging.getLogger().handlers)
+        with patch("airsupply.controller.agent.register", AsyncMock()), \
+             patch("airsupply.controller.spp.register", AsyncMock(return_value=Mock())), \
+             patch.object(mqtt, "configured", return_value=True):
+            try:
+                await self.controller.start()
+                for address in (MINI_ADDRESS, ADDRESS):
+                    topic = f"airsupply/{entities.node(address)}/state"
+                    self.assertEqual("off", messages[topic]["connected"])
+                driver.start.assert_called_once()
+                await self.controller.stop()
+            finally:
+                for handler in set(logging.getLogger().handlers) - handlers:
+                    logging.getLogger().removeHandler(handler)
+
     async def test_setup_read_standby_history_and_reconnect_through_http(self):
         self.controller.history = HistoryManager(
             store=HistoryStore(str(Path(self.folder.name) / "history.sqlite3")),

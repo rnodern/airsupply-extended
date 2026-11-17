@@ -183,6 +183,10 @@ class Controller:
 
         self.publisher.start()
         await self.refresh_people()
+        for address in self._paired():
+            self._publish(address)
+            if store.driver(address) == AIRSENSE11:
+                self._air11_driver(address).start()
         self._schedule_task = asyncio.create_task(self._schedule())
 
     async def stop(self):
