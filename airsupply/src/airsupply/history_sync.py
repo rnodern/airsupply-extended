@@ -29,10 +29,14 @@ class HistoryManager:
             else os.environ.get("AIRSUPPLY_HISTORY_TIMEOUT_SECONDS", "300")
         ))
 
-    def is_due(self, address, *, now=None):
+    def is_due(self, address, *, now=None, last_therapy_use=None):
         now = now or dt.datetime.now(dt.timezone.utc)
         last = self.store.last_success(address)
-        return last is None or now - last >= dt.timedelta(hours=self.sync_hours)
+        if last is None or now - last >= dt.timedelta(hours=self.sync_hours):
+            return True
+        # In standby, this also catches sessions the bridge missed while offline.
+        last_use = history.corrected_time(last_therapy_use, self.clock_offset)
+        return last_use is not None and last < last_use <= now
 
     async def sync(self, session, address):
         """Only call while holding AirSupply's existing per-device session lock.

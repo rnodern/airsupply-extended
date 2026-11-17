@@ -22,16 +22,17 @@ AHI_TYPES = frozenset({
 })
 
 
-def _time(raw, offset):
+def corrected_time(raw, offset):
+    """Parse an ISO timestamp and apply the measured device clock offset."""
     if not isinstance(raw, str):
         return None
     try:
         value = datetime.fromisoformat(raw.replace("Z", "+00:00"))
-    except ValueError:
+        if value.tzinfo is not None:
+            return value + timedelta(seconds=offset)
+    except (ValueError, OverflowError):
         return None
-    if value.tzinfo is None:
-        return None
-    return value + timedelta(seconds=offset)
+    return None
 
 
 def _percentile(values, fraction):
@@ -87,7 +88,7 @@ def nightly_summaries(notifications, *, timezone="Australia/Melbourne",
                 for event in item.get("events", []):
                     if not isinstance(event, dict):
                         continue
-                    instant = _time(event.get("time"), offset)
+                    instant = corrected_time(event.get("time"), offset)
                     kind = event.get("event")
                     if instant is not None and isinstance(kind, str):
                         if signal == USAGE:
@@ -99,7 +100,7 @@ def nightly_summaries(notifications, *, timezone="Australia/Melbourne",
             record = item.get("periodic")
             if not isinstance(record, dict):
                 continue
-            start = _time(record.get("startTime"), offset)
+            start = corrected_time(record.get("startTime"), offset)
             if start is None:
                 continue
             try:

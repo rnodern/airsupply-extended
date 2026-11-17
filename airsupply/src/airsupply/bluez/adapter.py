@@ -5,7 +5,8 @@ import logging
 from dbus_next import DBusError, Variant
 
 from . import constants as c
-from .survey import looks_like_airmini, managed_objects
+from .survey import managed_objects
+from ..machine import detect
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ def _unwrap(props):
 
 def _device(path, props):
     uuids = [u.lower() for u in props.get("UUIDs", [])]
+    driver = detect(props)
     return {
         "path": path,
         "address": str(props.get("Address", "")).upper(),
@@ -33,7 +35,8 @@ def _device(path, props):
         "paired": bool(props.get("Paired")),
         "connected": bool(props.get("Connected")),
         "trusted": bool(props.get("Trusted")),
-        "candidate": looks_like_airmini(props),
+        "candidate": driver is not None,
+        "driver": driver,
     }
 
 
@@ -63,12 +66,11 @@ async def snapshot(bus):
 async def start_discovery(bus, adapter_path):
     """Our own discovery session, alongside Home Assistant's BLE one.
 
-    Sessions are per client and the adapter takes the union of every
-    client's filter, so asking for BR/EDR here adds Classic inquiry to
-    whatever is already running and stops nothing.
+    BlueZ's auto transport discovers both AirMini Classic and Air11 BLE.
+    Discovery sessions belong to each client independently.
     """
     adapter = await _interface(bus, adapter_path, c.ADAPTER)
-    await adapter.call_set_discovery_filter({"Transport": Variant("s", "bredr")})
+    await adapter.call_set_discovery_filter({"Transport": Variant("s", "auto")})
     await adapter.call_start_discovery()
 
 

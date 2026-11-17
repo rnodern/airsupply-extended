@@ -84,3 +84,25 @@ const currentNight = new Date(2026,10,16,12);
 const huge = invalidFallback._fold([{start:new Date(2026,10,16,1).getTime(),change:29.183}], currentNight);
 check("29-hour usage is suppressed rather than presented",
   huge.find(n => n.at === invalidFallback._nightStart(new Date(2026,10,16,1)))?.hours === null);
+
+const deviceSummaries = make([
+  {night:"2026-10-11", usage_hours:4, ahi:2.5, source:"airsense11_summary"},
+  {night:"2026-10-12", usage_hours:8, ahi:5.0, source:"airsense11_summary"},
+]);
+check("AirSense summary AHI is weighted by usage",
+  deviceSummaries._dashboard().includes(">4.17</strong>"));
+check("unreported counts are marked unavailable on the graph",
+  deviceSummaries._eventChart(deviceSummaries._history()).includes("Event counts unavailable"));
+check("summary records do not acquire artificial event counts",
+  !deviceSummaries._history().some(n => n.ahi_events !== undefined));
+const missingAHI = make([{night:"2026-10-13",usage_hours:7}]);
+check("unknown AHI stays unavailable in the average",
+  /Average AHI<\/span>\s*<strong>—<\/strong>/.test(missingAHI._dashboard()));
+const mixedSources = make([
+  {night:"2026-10-11", usage_hours:4, ahi:2.5, ahi_events:10},
+  {night:"2026-10-12", usage_hours:8, ahi:5.0},
+  {night:"2026-10-13", usage_hours:5},
+]);
+check("weighted AHI handles mixed sources and unknown nights",
+  mixedSources._dashboard().includes(">4.17</strong>") &&
+  mixedSources._dashboard().includes("weighted by usage · 2 nights"));

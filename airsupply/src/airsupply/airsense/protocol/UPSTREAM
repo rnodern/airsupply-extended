@@ -1,0 +1,5 @@
+Source https://github.com/maroliar/hass-resmed-airsense
+Commit 01dae572e9fe0732905e11427fed826266f91354
+Directory custom_components/resmed_airsense/resmed_air_ble
+License MIT, copyright 2026 Marcelo Oliveira de Araujo
+Local changes add request restrictions and strict malformed-summary checks.

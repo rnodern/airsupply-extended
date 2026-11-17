@@ -1,12 +1,58 @@
-# airsupply
+# AirSupply Extended
 
-Monitor a ResMed AirMini CPAP in Home Assistant, over Bluetooth Classic.
+Monitor CPAP usage and nightly history in Home Assistant. The development
+branch supports the ResMed AirMini over Bluetooth Classic and the AirSense 11
+over Bluetooth LE.
 
 Each machine becomes a device belonging to one of your people: therapy hours,
 last used, state, therapy mode, pressures. It reads; it never writes.
 
-Bluetooth Classic, not BLE, so the host must be within about ten metres of the
-machine.
+The host's Bluetooth adapter must be within range of each machine.
+
+## Multi-machine development
+
+`feature/multi-machine` adds an AirSense 11 driver using the MIT-licensed
+protocol client and summary parser from
+[maroliar/hass-resmed-airsense](https://github.com/maroliar/hass-resmed-airsense),
+pinned to commit `01dae572e9fe0732905e11427fed826266f91354`. Its copyright
+and license are included in `airsupply/airsense/protocol/LICENSE` inside the
+container.
+
+Both drivers use AirSupply's existing MQTT discovery, owner assignment,
+per-machine topics and 14-night card. Existing machine records default to
+the AirMini driver and retain their entity identifiers and pairing keys.
+
+The experimental ARM64 image is
+`ghcr.io/rnodern/airsupply-extended:multi-machine-arm64`. It uses the same
+port, D-Bus mount, persistent data volume and MQTT environment as the AirMini
+development image. Historical summaries are enabled with
+`AIRSUPPLY_HISTORY_ENABLED=1`; the timezone comes from
+`AIRSUPPLY_HISTORY_TIMEZONE`.
+
+In AirSupply, choose Look for machines and add the AirSense. Open
++ More → myAir App on the machine, then press Pair in AirSupply. The
+Bluetooth connection brings up the code on the machine's screen; enter that
+code in AirSupply to finish. This creates an application
+pairing and replaces the phone app's Bluetooth pairing. myAir's cellular
+nightly reports continue. Each machine has its own stored credentials,
+reconnect loop, Disconnect action and owner.
+
+The AirSense pushes therapy state changes. AirSupply waits 60 seconds after
+Therapy → Standby to read the completed daily summary, retrying failed
+downloads after two minutes. The AirMini refreshes history on its first
+regular standby reading after therapy and retries on the next read.
+The configured historical sync interval is also retained as a fallback.
+
+AirSense daily records provide usage and reported AHI. The card computes a
+usage-weighted average from the available values and marks unreported event
+counts as unavailable. AirMini records can also supply their measured event
+counts. Each machine's history stays under its own MQTT topic.
+
+Pairing, encrypted reads, pushed standby updates, history publication,
+disconnect/reconnect and legacy AirMini compatibility have synthetic tests.
+An initial Raspberry Pi trial read both an AirMini and an AirSense 11 AutoSet,
+including authentication and daily-summary downloads. An AirSense overnight
+session and automatic end-of-therapy refresh remain to be verified.
 
 ## Install
 

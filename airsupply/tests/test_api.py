@@ -17,7 +17,7 @@ STATE = frozenset({
 })
 MACHINE = frozenset({
     "address", "name", "signal", "classic", "serial", "bonded", "paired",
-    "connected", "released", "person", "person_id", "missing_person", "last_read",
+    "connected", "released", "person", "person_id", "missing_person", "last_read", "driver", "pairing_ready",
 })
 FOUND = frozenset({"address", "name", "signal", "classic", "serial", "bonded", "candidate"})
 PERSON = frozenset({"id", "entity_id", "name"})
@@ -38,6 +38,8 @@ DEVICE = {
 }
 MACHINE_ROW = {
     "address": ADDRESS, "name": "AirMini", "signal": -57, "classic": True, "serial": True,
+    "driver": "airmini",
+    "pairing_ready": False,
     "bonded": True, "paired": True, "connected": True, "released": False,
     "person": PERSON_ROW, "person_id": PERSON_ROW["id"],
     "missing_person": False, "last_read": "2026-09-25 20:12:10",
