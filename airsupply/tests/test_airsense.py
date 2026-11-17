@@ -419,4 +419,3 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
                 self.assertFalse(any(request.startswith("Set") for request in radio.requests))
             finally:
                 await self.controller._release(ADDRESS)
-
