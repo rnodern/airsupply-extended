@@ -369,6 +369,19 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn(MINI_ADDRESS, self.controller.sessions)
         self.assertNotIn(ADDRESS, self.controller.air11)
 
+    async def test_forget_keeps_its_original_target_if_selection_changes(self):
+        store.add(ADDRESS, driver=AIRSENSE11)
+        store.add(MINI_ADDRESS)
+        self.controller.selected = ADDRESS
+        async def release_and_change_selection(address):
+            self.controller.selected = MINI_ADDRESS
+        self.controller._release = release_and_change_selection
+        self.controller.publisher.forget = Mock()
+        await self.controller._forget()
+        self.assertNotIn(ADDRESS, store.machines())
+        self.assertIn(MINI_ADDRESS, store.machines())
+        self.controller.publisher.forget.assert_called_once_with(ADDRESS)
+
     async def test_setup_read_standby_history_and_reconnect_through_http(self):
         self.controller.history = HistoryManager(
             store=HistoryStore(str(Path(self.folder.name) / "history.sqlite3")),

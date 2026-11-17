@@ -655,23 +655,23 @@ class Controller:
         self._spawn("forget", self._forget)
 
     async def _forget(self):
+        address = self.selected
         dev = self._selected_device()
-        if dev is not None and self.adapter and store.driver(self.selected) == AIRMINI:
+        if dev is not None and self.adapter and store.driver(address) == AIRMINI:
             try:
                 await adapter.remove(self.bus, self.adapter["path"], dev["path"])
                 log.info("Unpaired %s.", dev["address"])
             except Exception as err:  # noqa: BLE001
                 log.warning("Could not unpair the machine: %s", err)
-        if self.selected:
-            gone = self.selected
-            await self._release(gone)
-            self.released.discard(gone)
-            self.publisher.forget(gone)
-            store.forget(gone)
+        if address:
+            await self._release(address)
+            self.released.discard(address)
+            self.publisher.forget(address)
+            store.forget(address)
             if self.history is not None:
-                self.history.forget(gone)
-            self._therapy_history_pending.discard(gone)
-            self.readings.pop(gone, None)
+                self.history.forget(address)
+            self._therapy_history_pending.discard(address)
+            self.readings.pop(address, None)
         self.selected = store.selected()
         self.session_state = None
 
