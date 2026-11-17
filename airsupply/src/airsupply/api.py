@@ -75,7 +75,7 @@ def stage(raw, chosen):
     if chosen is None:
         return "choose"
     if not chosen["paired"] and chosen.get("driver") == "airsense11":
-        return "pin"
+        return "pin" if chosen.get("pairing_ready") else "pairing"
     if not chosen["paired"] and not chosen["bonded"]:
         return "pairing"
     if not chosen["paired"]:

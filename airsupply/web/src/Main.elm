@@ -47,6 +47,7 @@ type alias Machine =
     { address : String
     , name : String
     , driver : String
+    , pairingReady : Bool
     , signal : Maybe Int
     , classic : Bool
     , serial : Bool
@@ -403,10 +404,11 @@ personDecoder =
 
 machineDecoder : D.Decoder Machine
 machineDecoder =
-    D.map7 Machine
+    D.map8 Machine
         (D.field "address" D.string)
         (D.field "name" D.string)
         (D.field "driver" D.string)
+        (D.field "pairing_ready" D.bool)
         (D.field "signal" (D.nullable D.int))
         (D.field "classic" D.bool)
         (D.field "serial" D.bool)
@@ -766,7 +768,15 @@ setup model state =
 
         NeedsPairing ->
             [ div [ class "card" ]
-                [ p [ class "note" ] [ text "Put the machine in pairing mode, then pair." ]
+                [ p [ class "note" ]
+                    [ text
+                        (if Maybe.map .driver state.machine == Just "airsense11" then
+                            "Open + More → myAir App on the AirSense, then press Pair here to display its code."
+
+                         else
+                            "Put the machine in pairing mode, then pair."
+                        )
+                    ]
                 , div [ class "row-btns" ]
                     [ button [ class "go", onClick (Send "bond" []), disabled working ] [ text "Pair" ]
                     , scanButton state

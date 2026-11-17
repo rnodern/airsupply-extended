@@ -272,6 +272,27 @@ class DriverTests(unittest.IsolatedAsyncioTestCase):
                 await client.call(method)
         client._ble.write_gatt_char.assert_not_awaited()
 
+    async def test_pin_submission_requires_an_open_pairing_window(self):
+        with self.assertRaisesRegex(RuntimeError, "Press Pair first"):
+            await self.driver.pair("123456")
+        self.assertIsNone(store.credentials(ADDRESS))
+
+    async def test_stopping_a_pairing_window_releases_the_connection(self):
+        radio = Mock(is_connected=True)
+        radio.connect = AsyncMock()
+        radio.disconnect = AsyncMock()
+        protocol = AsyncMock()
+        with patch("airsupply.airsense.driver.BleakScanner.find_device_by_address", AsyncMock(return_value=object())), \
+             patch("airsupply.airsense.driver.BleakClient", return_value=radio), \
+             patch("airsupply.airsense.driver.AirSenseClient", return_value=protocol):
+            await self.driver.prepare_pairing()
+            self.assertTrue(self.driver.pairing_ready)
+            await self.driver.stop()
+        self.assertFalse(self.driver.pairing_ready)
+        protocol.pair.assert_not_awaited()
+        radio.disconnect.assert_awaited_once()
+        self.assertIsNone(store.credentials(ADDRESS))
+
     async def test_credentials_are_machine_scoped_and_private(self):
         credentials = Credentials("SYNTHETIC", b"x" * 32).as_dict()
         store.remember_credentials(ADDRESS, credentials)
@@ -292,6 +313,9 @@ class DriverTests(unittest.IsolatedAsyncioTestCase):
         with patch("airsupply.airsense.driver.BleakScanner.find_device_by_address", AsyncMock(return_value=object())), \
              patch("airsupply.airsense.driver.BleakClient", return_value=radio), \
              patch("airsupply.airsense.driver.AirSenseClient", return_value=protocol):
+            await self.driver.prepare_pairing()
+            self.assertTrue(self.driver.pairing_ready)
+            protocol.pair.assert_not_awaited()
             await self.driver.pair("123456")
             self.assertTrue(self.driver.connected)
             self.assertEqual("SYNTHETIC", store.credentials(ADDRESS)["client_id"])
@@ -336,7 +360,7 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
     async def test_discovered_air11_uses_the_existing_setup_route_without_a_bluez_bond(self):
         reply = await self.client.post("/api/select", json={"address": ADDRESS})
         page = await reply.json()
-        self.assertEqual("pin", page["stage"])
+        self.assertEqual("pairing", page["stage"])
         self.assertEqual(AIRSENSE11, page["machine"]["driver"])
         self.assertFalse(page["machine"]["bonded"])
         self.assertEqual(AIRSENSE11, store.driver(ADDRESS))
@@ -403,6 +427,10 @@ class ApiTests(unittest.IsolatedAsyncioTestCase):
              patch.object(mqtt, "configured", return_value=True):
             await self.client.post("/api/select", json={"address": ADDRESS})
             try:
+                response = await self.client.post("/api/bond", json={})
+                await self.controller._task
+                prepared = await (await self.client.get("/api/state")).json()
+                self.assertEqual("pin", prepared["stage"])
                 response = await self.client.post("/api/pair", json={"pin": "123456"})
                 self.assertEqual(200, response.status)
                 await self.controller._task

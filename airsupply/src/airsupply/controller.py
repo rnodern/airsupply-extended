@@ -373,6 +373,7 @@ class Controller:
                 "paired": bool(record["paired"] and not (ble and ble.auth_required)),
                 "connected": address in self.sessions or bool(ble and ble.connected),
                 "driver": driver,
+                "pairing_ready": bool(ble and ble.pairing_ready),
                 "released": address in self.released,
                 "person": person.to_json() if person else None,
                 "person_id": record["person_id"],
@@ -522,6 +523,12 @@ class Controller:
         self._spawn("bond", self._bond)
 
     async def _bond(self):
+        address = self.selected
+        if address and store.driver(address) == AIRSENSE11:
+            await self._release(address)
+            self.released.discard(address)
+            await self._air11_driver(address).prepare_pairing()
+            return
         dev = self._selected_device()
         if dev is None:
             raise RuntimeError("No machine selected.")
@@ -609,8 +616,6 @@ class Controller:
     async def _first_pair(self, pin):
         address = self.selected
         if address and store.driver(address) == AIRSENSE11:
-            await self._release(address)
-            self.released.discard(address)
             await self._air11_driver(address).pair(pin)
             return
         held = await self._held(address, pin=pin)

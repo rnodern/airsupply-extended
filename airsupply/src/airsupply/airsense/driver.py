@@ -30,6 +30,7 @@ class Driver:
         self.read_every = read_every
         self.connected = False
         self.auth_required = False
+        self.pairing_ready = False
         self.problem = None
         self.model = "AirSense 11"
         self.results = {}
@@ -43,16 +44,35 @@ class Driver:
         self._summary_retry_at = 0
         self._ble = None
         self._client = None
+        self._pin = None
+        self._paired = None
 
     def start(self):
         if not self.auth_required and (self._task is None or self._task.done()):
             self._task = asyncio.create_task(self._run())
 
-    async def pair(self, pin):
+    async def prepare_pairing(self):
+        await self.stop()
+        self.auth_required = False
+        self.problem = None
         ready = asyncio.get_running_loop().create_future()
-        self._task = asyncio.create_task(self._run(pin, ready))
+        self._pin = asyncio.get_running_loop().create_future()
+        self._paired = asyncio.get_running_loop().create_future()
+        # A pairing window can expire before a user submits its code.
+        self._paired.add_done_callback(lambda future: None if future.cancelled() else future.exception())
+        self._task = asyncio.create_task(self._run(ready, self._paired))
         try:
-            await asyncio.wait_for(ready, 60)
+            await asyncio.wait_for(ready, 45)
+        except BaseException:
+            await self.stop()
+            raise
+
+    async def pair(self, pin):
+        if not self.pairing_ready or self._pin is None or self._pin.done():
+            raise RuntimeError("Press Pair first to display a fresh code on the AirSense.")
+        self._pin.set_result(pin)
+        try:
+            await asyncio.wait_for(asyncio.shield(self._paired), 60)
         except BaseException:
             await self.stop()
             raise
@@ -67,7 +87,7 @@ class Driver:
             await asyncio.gather(self._task, return_exceptions=True)
             self._task = None
 
-    async def _run(self, pin=None, ready=None):
+    async def _run(self, prepared=None, paired=None):
         try:
             while True:
                 try:
@@ -78,7 +98,12 @@ class Driver:
                     await self._ble.connect()
                     self._client = AirSenseClient(self._ble, self._on_event)
                     await self._client.start()
-                    if pin is not None:
+                    if prepared is not None:
+                        self.pairing_ready = True
+                        self.on_update()
+                        prepared.set_result(None)
+                        pin = await asyncio.wait_for(self._pin, 90)
+                        self.pairing_ready = False
                         credentials = await self._client.pair(pin)
                         store.remember_credentials(self.address, credentials.as_dict())
                         pin = None
@@ -91,22 +116,26 @@ class Driver:
                     self.auth_required = False
                     self.problem = None
                     self.on_update()
-                    if ready is not None and not ready.done():
-                        ready.set_result(None)
+                    if paired is not None and not paired.done():
+                        paired.set_result(None)
+                    prepared = paired = None
                     log.info("AirSense Bluetooth session opened for %s.", self.address)
                     await self._client.subscribe(("FGState",))
                     await self._monitor()
                 except AuthError:
                     self.auth_required = True
                     self.problem = "Pair again using the code on the machine. Its Bluetooth pairing may have changed."
-                    if ready is not None and not ready.done():
-                        ready.set_exception(RuntimeError(self.problem))
+                    for future in (prepared, paired):
+                        if future is not None and not future.done():
+                            future.set_exception(RuntimeError(self.problem))
                     return
                 except Exception as err:  # noqa: BLE001 -- recover a lost BLE session
                     self.problem = "AirSense is asleep, out of range, or its Bluetooth session ended. Retrying."
                     log.warning("AirSense Bluetooth session deferred: %s.", type(err).__name__)
-                    if ready is not None and not ready.done():
-                        ready.set_exception(RuntimeError(self.problem))
+                    if prepared is not None:
+                        for future in (prepared, paired):
+                            if future is not None and not future.done():
+                                future.set_exception(RuntimeError(self.problem))
                         return
                 finally:
                     await self._cleanup()
@@ -116,13 +145,15 @@ class Driver:
                 except TimeoutError:
                     pass
         finally:
-            if ready is not None and not ready.done():
-                ready.cancel()
+            for future in (prepared, paired, self._pin):
+                if future is not None and not future.done():
+                    future.cancel()
 
     async def _cleanup(self):
         client, ble = self._client, self._ble
         self._client = self._ble = None
         self.connected = False
+        self.pairing_ready = False
         self.on_update()
         if client is not None:
             try:

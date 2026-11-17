@@ -29,8 +29,10 @@ development image. Historical summaries are enabled with
 `AIRSUPPLY_HISTORY_ENABLED=1`; the timezone comes from
 `AIRSUPPLY_HISTORY_TIMEZONE`.
 
-In AirSupply, choose Look for machines, add the AirSense, then enter the
-code from the machine's Bluetooth pairing screen. This creates an application
+In AirSupply, choose Look for machines and add the AirSense. Open
++ More → myAir App on the machine, then press Pair in AirSupply. The
+Bluetooth connection brings up the code on the machine's screen; enter that
+code in AirSupply to finish. This creates an application
 pairing and replaces the phone app's Bluetooth pairing. myAir's cellular
 nightly reports continue. Each machine has its own stored credentials,
 reconnect loop, Disconnect action and owner.
@@ -48,7 +50,9 @@ counts. Each machine's history stays under its own MQTT topic.
 
 Pairing, encrypted reads, pushed standby updates, history publication,
 disconnect/reconnect and legacy AirMini compatibility have synthetic tests.
-AirSense 11 operation on a physical machine remains to be verified.
+An initial Raspberry Pi trial read both an AirMini and an AirSense 11 AutoSet,
+including authentication and daily-summary downloads. An AirSense overnight
+session and automatic end-of-therapy refresh remain to be verified.
 
 ## Install
 
